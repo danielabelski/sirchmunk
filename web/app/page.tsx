@@ -1009,6 +1009,50 @@ export default function HomePage() {
                             ))}
                           </div>
                         )}
+
+                      {/* References (evidence from search) */}
+                      {msg.sources?.references && msg.sources.references.length > 0 && (
+                        <div className="mt-2 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
+                          <details className="group">
+                            <summary className="flex items-center gap-2 px-3 py-2 cursor-pointer select-none bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+                              <ChevronDown className="w-3.5 h-3.5 text-slate-400 transition-transform group-open:rotate-180" />
+                              <BookOpen className="w-3.5 h-3.5 text-amber-500" />
+                              <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                                {t("References")} ({msg.sources.references.length})
+                              </span>
+                            </summary>
+                            <div className="divide-y divide-slate-100 dark:divide-slate-700/50">
+                              {msg.sources.references.map((ref, i) => (
+                                <div key={`ref-${i}`} className="px-3 py-2.5 space-y-1.5">
+                                  <div className="flex items-center gap-1.5">
+                                    <FileText className="w-3 h-3 text-blue-500 shrink-0" />
+                                    <span className="text-xs font-medium text-slate-700 dark:text-slate-300 truncate" title={ref.file}>
+                                      {ref.file.split('/').pop()}
+                                    </span>
+                                  </div>
+                                  {ref.summary && (
+                                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                                      {ref.summary}
+                                    </p>
+                                  )}
+                                  {ref.snippets && ref.snippets.length > 0 && (
+                                    <div className="space-y-1">
+                                      {ref.snippets.map((snippet: string, si: number) => (
+                                        <pre
+                                          key={si}
+                                          className="text-xs bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-2 py-1.5 rounded overflow-x-auto whitespace-pre-wrap break-words leading-relaxed"
+                                        >
+                                          {snippet}
+                                        </pre>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        </div>
+                      )}
                     </div>
                   </>
                 )}

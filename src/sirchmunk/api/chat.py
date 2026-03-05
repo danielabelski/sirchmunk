@@ -609,8 +609,13 @@ async def _run_rag_search(
     paths: List[str],
     search_mode: str,
     search_log_callback,
-) -> tuple[str, list]:
-    """Execute a single RAG search attempt. Returns (result_text, llm_usages)."""
+) -> tuple:
+    """Execute a single RAG search attempt.
+
+    Returns:
+        ``(answer_text, llm_usages, references)`` where *references* is a
+        list of evidence dicts extracted from the SearchContext cluster.
+    """
     search_engine = get_search_instance(log_callback=search_log_callback)
 
     result = await search_engine.search(
@@ -618,8 +623,26 @@ async def _run_rag_search(
         paths=paths,
         mode=search_mode,
         top_k_files=3,
+        return_context=True,
     )
-    return result, list(search_engine.llm_usages)
+
+    references: List[Dict[str, Any]] = []
+    if hasattr(result, "answer"):
+        answer = result.answer or ""
+        cluster = result.cluster
+        if cluster and getattr(cluster, "evidences", None):
+            for ev in cluster.evidences:
+                if not ev.is_found:
+                    continue
+                references.append({
+                    "file": str(ev.file_or_url),
+                    "summary": ev.summary,
+                    "snippets": ev.snippets[:3],
+                })
+    else:
+        answer = result if isinstance(result, str) else str(result)
+
+    return answer, list(search_engine.llm_usages), references
 
 
 async def _chat_rag(
@@ -656,7 +679,7 @@ async def _chat_rag(
 
             logger.info("[MODE 2] RAG search with query: %s, paths: %s", message, paths)
 
-            search_result, llm_usages = await _run_rag_search(
+            search_result, llm_usages, references = await _run_rag_search(
                 message, paths, search_mode, search_log_callback,
             )
 
@@ -677,6 +700,8 @@ async def _chat_rag(
                 "content": f"Retrieved content from {kb_name}",
                 "relevance_score": 0.92,
             }]
+            if references:
+                sources["references"] = references
             return search_result, sources
 
         except Exception as e:

@@ -101,11 +101,11 @@ class AgenticSearch(BaseSearch):
         self.max_queries_per_cluster: int = 5
 
         # Initialize embedding client for cluster reuse.
-        # EmbeddingUtil.__init__ is cheap (stores config only).  The heavy
-        # SentenceTransformer construction is deferred to start_loading(),
-        # which is called lazily on the first DEEP-mode cluster-reuse
-        # check so that FAST-mode searches never trigger model loading
-        # and never suffer from GIL contention.
+        # EmbeddingUtil.__init__ is cheap (stores config only).
+        # start_loading() is called immediately so the background thread
+        # can download / construct the model while the first search runs.
+        # By the time the search finishes and needs to persist the cluster
+        # embedding, the model is typically ready.
         self.embedding_client = None
         self.cluster_sim_threshold: float = kwargs.pop('cluster_sim_threshold', 0.85)
         self.cluster_sim_top_k: int = kwargs.pop('cluster_sim_top_k', 3)
@@ -116,8 +116,9 @@ class AgenticSearch(BaseSearch):
                 self.embedding_client = EmbeddingUtil(
                     cache_dir=str(self.work_path / ".cache" / "models")
                 )
+                self.embedding_client.start_loading()
                 _loguru_logger.info(
-                    "Embedding client created (model loading deferred until first use)"
+                    "Embedding client created, background model loading started"
                 )
             except Exception as e:
                 _loguru_logger.error(
@@ -335,8 +336,13 @@ class AgenticSearch(BaseSearch):
                 await self._logger.warning(f"Failed to save knowledge cluster: {update_error}")
                 return
 
-        # Compute and store embedding for the cluster (skip if model not ready)
-        if self.embedding_client and self.embedding_client.is_ready():
+        # Compute and store embedding for the cluster.
+        # embed() internally awaits model readiness via _ensure_model_async(),
+        # so even if the background loading thread hasn't finished yet, we
+        # block (non-blocking async) until the model is ready rather than
+        # silently skipping the embedding — which would make the cluster
+        # invisible to future similarity searches.
+        if self.embedding_client:
             try:
                 from sirchmunk.utils.embedding_util import compute_text_hash
 
@@ -362,9 +368,8 @@ class AgenticSearch(BaseSearch):
             except Exception as e:
                 await self._logger.warning(f"Failed to compute embedding for cluster {cluster.id}: {e}")
         else:
-            await self._logger.warning(
-                f"Embedding client not available — skipping embedding for cluster {cluster.id}. "
-                "Ensure sentence-transformers, torch, and modelscope are installed."
+            await self._logger.debug(
+                f"Embedding client not configured — skipping embedding for cluster {cluster.id}"
             )
 
         # Flush DuckDB → parquet immediately so embedding data is persisted.
