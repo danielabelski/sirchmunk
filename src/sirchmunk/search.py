@@ -351,13 +351,13 @@ class AgenticSearch(BaseSearch):
             return None
 
         try:
-            # Wait for the model (non-blocking via executor) instead of
-            # returning None immediately — this ensures reuse works even
-            # on the very first search call.
+            # Wait briefly for the model so reuse can work when it's already loading.
+            # Use a short timeout to avoid blocking the first request (e.g. in Docker
+            # the model may take 30–60s to load; we skip reuse and do full search instead).
             if not self.embedding_client.is_ready():
                 self.embedding_client.start_loading()
                 try:
-                    await self.embedding_client._ensure_model_async(timeout=60)
+                    await self.embedding_client._ensure_model_async(timeout=5)
                 except Exception:
                     await self._logger.debug(
                         "Embedding model not ready yet, skipping cluster reuse"
@@ -486,34 +486,42 @@ class AgenticSearch(BaseSearch):
                 await self._logger.warning(f"Failed to save knowledge cluster: {update_error}")
                 return
 
-        # Compute and store embedding for the cluster.
-        # embed() internally awaits model readiness via _ensure_model_async(),
-        # so even if the background loading thread hasn't finished yet, we
-        # block (non-blocking async) until the model is ready rather than
-        # silently skipping the embedding — which would make the cluster
-        # invisible to future similarity searches.
+        # Compute and store embedding for the cluster when the model is ready.
+        # Use a short wait to avoid blocking the response if the model is still
+        # loading (e.g. first request in Docker). If not ready, skip embedding
+        # so the cluster is still saved and can be reused after the next load.
         if self.embedding_client:
             try:
-                from sirchmunk.utils.embedding_util import compute_text_hash
+                if not self.embedding_client.is_ready():
+                    try:
+                        await self.embedding_client._ensure_model_async(timeout=3)
+                    except Exception:
+                        pass
+                if self.embedding_client.is_ready():
+                    from sirchmunk.utils.embedding_util import compute_text_hash
 
-                combined_text = self.knowledge_storage.combine_cluster_fields(
-                    cluster.queries
-                )
-                text_hash = compute_text_hash(combined_text)
+                    combined_text = self.knowledge_storage.combine_cluster_fields(
+                        cluster.queries
+                    )
+                    text_hash = compute_text_hash(combined_text)
 
-                embedding_vector = (await self.embedding_client.embed([combined_text]))[0]
+                    embedding_vector = (await self.embedding_client.embed([combined_text]))[0]
 
-                await self.knowledge_storage.store_embedding(
-                    cluster_id=cluster.id,
-                    embedding_vector=embedding_vector,
-                    embedding_model=self.embedding_client.model_id,
-                    embedding_text_hash=text_hash,
-                )
+                    await self.knowledge_storage.store_embedding(
+                        cluster_id=cluster.id,
+                        embedding_vector=embedding_vector,
+                        embedding_model=self.embedding_client.model_id,
+                        embedding_text_hash=text_hash,
+                    )
 
-                await self._logger.info(
-                    f"Stored embedding for cluster {cluster.id} "
-                    f"(dim={len(embedding_vector)}, model={self.embedding_client.model_id})"
-                )
+                    await self._logger.info(
+                        f"Stored embedding for cluster {cluster.id} "
+                        f"(dim={len(embedding_vector)}, model={self.embedding_client.model_id})"
+                    )
+                else:
+                    await self._logger.debug(
+                        f"Embedding model not ready — skipping embedding for cluster {cluster.id}"
+                    )
 
             except Exception as e:
                 await self._logger.warning(f"Failed to compute embedding for cluster {cluster.id}: {e}")

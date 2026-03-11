@@ -75,6 +75,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.on_event("startup")
+def _prewarm_chat_search():
+    """Create the chat search singleton at startup so the embedding model starts loading immediately.
+    This reduces the chance of the first user request blocking on model load (e.g. in Docker).
+    """
+    try:
+        from .chat import get_search_instance
+        get_search_instance()
+    except Exception:
+        pass
+
+
 # Include all API routers (registered before static mount so they take priority)
 app.include_router(knowledge_router)
 app.include_router(settings_router)
