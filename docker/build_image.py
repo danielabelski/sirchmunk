@@ -281,7 +281,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--rg_version", default=None,
                     help="ripgrep version (default: 14.1.1)")
     p.add_argument("--rga_version", default=None,
-                    help="ripgrep-all version (default: v1.0.0-alpha.5)")
+                    help="ripgrep-all version (default: v0.10.10)")
     p.add_argument("--port", default=None,
                     help="Exposed port (default: 8584)")
     p.add_argument("--sirchmunk_version", default=None,

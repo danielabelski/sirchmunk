@@ -15,3 +15,7 @@ duckdb
 kreuzberg>=4.0.0rc1
 sentence-transformers
 modelscope
+python-docx
+openpyxl
+python-pptx
+charset-normalizer

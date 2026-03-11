@@ -36,6 +36,7 @@ docker run -d \
   -e UI_THEME=light \
   -e UI_LANGUAGE=en \
   -e SIRCHMUNK_VERBOSE=false \
+  -e SIRCHMUNK_SEARCH_PATHS=/mnt/docs \
   -v /path/to/your_work_path:/data/sirchmunk \
   -v /path/to/your/docs:/mnt/docs:ro \
   modelscope-registry.us-west-1.cr.aliyuncs.com/modelscope-repo/sirchmunk:ubuntu22.04-py312-0.0.4
@@ -52,6 +53,9 @@ docker run -d \
 | `-e UI_THEME` | No | `light` | WebUI theme (`light` / `dark`) |
 | `-e UI_LANGUAGE` | No | `en` | WebUI language (`en` / `zh`) |
 | `-e SIRCHMUNK_VERBOSE` | No | `false` | Enable verbose logging (`true` / `false`) |
+| `-e SIRCHMUNK_SEARCH_PATHS` | No | (empty) | Comma-separated default search paths (e.g. `/mnt/docs`) |
+| `-e CHAT_HISTORY_MAX_TURNS` | No | `5` | Max chat history turns for multi-turn context |
+| `-e CHAT_HISTORY_MAX_TOKENS` | No | `32000` | Max tokens for chat history context |
 | `-p 8584:8584` | Yes | | Expose WebUI and API port |
 | `-v /data/sirchmunk:/data/sirchmunk` | Recommended | | Persist data (models, history, knowledge) across restarts |
 
@@ -88,8 +92,10 @@ response = requests.post(
         "query": "your search question here",
         "paths": ["/mnt/docs"],
         "mode": "FAST",           # "FAST" (default), "DEEP", or "FILENAME_ONLY"
+        "enable_dir_scan": True,  # enable directory scanning (DEEP/FAST)
         "max_depth": 5,           # optional: max directory depth
         "top_k_files": 3,         # optional: number of top files to return
+        "max_token_budget": 8192, # optional: LLM token budget (DEEP)
     },
 )
 
@@ -105,10 +111,13 @@ else:
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `query` | string | Yes | Search query or question |
-| `paths` | list | No | Directories or files to search (e.g., `["/mnt/docs"]`) |
+| `paths` | list | No | Directories or files to search (e.g., `["/mnt/docs"]`); falls back to `SIRCHMUNK_SEARCH_PATHS` if unset |
 | `mode` | string | No | `"FAST"` (default, greedy search 2-5s), `"DEEP"` (comprehensive analysis 10-30s), or `"FILENAME_ONLY"` (file discovery <1s) |
+| `enable_dir_scan` | bool | No | Enable directory scanning for file discovery in DEEP/FAST (default: true) |
 | `max_depth` | int | No | Maximum directory depth to search |
 | `top_k_files` | int | No | Number of top files to return |
+| `max_token_budget` | int | No | LLM token budget (DEEP mode) |
+| `return_context` | bool | No | Return full SearchContext with KnowledgeCluster and telemetry (default: false) |
 
 ### 4. Manage the container
 

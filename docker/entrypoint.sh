@@ -40,7 +40,8 @@ fi
 # Uses Python for safe replacement — avoids sed delimiter issues with
 # special characters (/, &, |, \) that may appear in URLs or API keys.
 for var in LLM_BASE_URL LLM_API_KEY LLM_MODEL_NAME LLM_TIMEOUT \
-           UI_THEME UI_LANGUAGE SIRCHMUNK_VERBOSE; do
+           UI_THEME UI_LANGUAGE SIRCHMUNK_VERBOSE SIRCHMUNK_SEARCH_PATHS \
+           CHAT_HISTORY_MAX_TURNS CHAT_HISTORY_MAX_TOKENS; do
     val="${!var}"
     if [ -n "$val" ]; then
         python3 -c "
