@@ -1328,6 +1328,7 @@ class AgenticSearch(BaseSearch):
 
     _SUMMARY_MAX_CONTEXT_CHARS = 100_000
     _SUMMARY_CHUNK_CHARS = 50_000
+    _SUMMARY_MAX_FILE_SIZE = 200 * 1024 * 1024  # 200 MB — sampling handles large files
 
     async def _summarize_documents(
         self,
@@ -1348,8 +1349,15 @@ class AgenticSearch(BaseSearch):
         """
         from sirchmunk.doc_qa import collect_doc_files, _extract_text, _sample_text
 
-        doc_files = collect_doc_files(paths, max_files=top_k_files)
+        doc_files = collect_doc_files(
+            paths,
+            max_files=top_k_files,
+            max_file_size=self._SUMMARY_MAX_FILE_SIZE,
+        )
         if not doc_files:
+            await self._logger.warning(
+                f"[Summary] No loadable documents found in paths: {paths}"
+            )
             return None
 
         doc_texts: List[Tuple[str, str]] = []
@@ -1360,8 +1368,13 @@ class AgenticSearch(BaseSearch):
                 fname = Path(df.path).name
                 doc_texts.append((fname, text))
                 total_chars += len(text)
+            else:
+                await self._logger.warning(
+                    f"[Summary] Text extraction failed for: {Path(df.path).name}"
+                )
 
         if not doc_texts:
+            await self._logger.warning("[Summary] No text could be extracted from collected documents")
             return None
 
         await self._logger.info(

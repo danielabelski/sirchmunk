@@ -137,6 +137,12 @@ def collect_doc_files(
                 continue
 
             if size == 0 or size > max_file_size:
+                if size > max_file_size:
+                    logger.debug(
+                        f"[DocQA] Skipping {fp.name}: "
+                        f"{size / 1024 / 1024:.1f} MB exceeds limit "
+                        f"({max_file_size / 1024 / 1024:.0f} MB)"
+                    )
                 continue
 
             collected.append(DocFile(
