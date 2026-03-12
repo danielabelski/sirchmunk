@@ -173,7 +173,10 @@ def get_current_env_variables() -> Dict[str, Any]:
         "LLM_BASE_URL": {
             "value": os.getenv("LLM_BASE_URL", _DEFAULT_LLM_BASE_URL),
             "default": _DEFAULT_LLM_BASE_URL,
-            "description": "Base URL for LLM API (OpenAI-compatible endpoint)",
+            "description": "Base URL for LLM API (OpenAI-compatible endpoint). "
+                           "Examples: https://api.openai.com/v1, "
+                           "https://api.minimax.io/v1, "
+                           "https://api.deepseek.com/v1",
             "category": "llm"
         },
         "LLM_API_KEY": {
@@ -186,7 +189,8 @@ def get_current_env_variables() -> Dict[str, Any]:
         "LLM_MODEL_NAME": {
             "value": os.getenv("LLM_MODEL_NAME", _DEFAULT_LLM_MODEL_NAME),
             "default": _DEFAULT_LLM_MODEL_NAME,
-            "description": "Model name for LLM",
+            "description": "Model name for LLM. "
+                           "Examples: gpt-5.2, MiniMax-M2.5, deepseek-chat",
             "category": "llm"
         },
         "GREP_CONCURRENT_LIMIT": {

@@ -259,6 +259,22 @@ asyncio.run(main())
   - 参考：https://github.com/BurntSushi/ripgrep | https://github.com/phiresky/ripgrep-all
 - 将 `"your-api-key"`、`"your-base-url"`、`"your-model-name"` 和 `/path/to/documents` 替换为实际值。
 
+<details>
+<summary><b>使用 MiniMax</b></summary>
+
+```python
+from sirchmunk.llm import OpenAIChat
+
+llm = OpenAIChat(
+    api_key="your-minimax-api-key",
+    base_url="https://api.minimax.io/v1",     # 海外版
+    # base_url="https://api.minimaxi.com/v1", # 国内版
+    model="MiniMax-M2.5"                       # 或 "MiniMax-M2.5-highspeed"
+)
+```
+
+</details>
+
 
 ### 命令行界面
 
@@ -814,8 +830,22 @@ Sirchmunk 采用 **无索引** 方法：
 
 任何 OpenAI 兼容 API 端点，包括但不限于：
 - OpenAI（GPT-5.2, ...）
+- [MiniMax](https://platform.minimax.io)（MiniMax-M2.5、MiniMax-M2.5-highspeed）
+- DeepSeek、Moonshot、Mistral、Groq、Together AI、Cohere
+- Google Gemini、智谱（GLM）、百川、零一万物、硅基流动、火山引擎
+- Azure OpenAI
 - 通过 Ollama、llama.cpp、vLLM、SGLang 等托管的本地模型
 - 通过 API 代理接入的 Claude
+
+使用 MiniMax 的配置示例：
+```bash
+LLM_BASE_URL=https://api.minimax.io/v1        # 海外版
+# LLM_BASE_URL=https://api.minimaxi.com/v1    # 国内版
+LLM_API_KEY=your-minimax-api-key
+LLM_MODEL_NAME=MiniMax-M2.5
+```
+
+详见 [MiniMax OpenAI 兼容 API 文档](https://platform.minimax.io/docs/api-reference/text-openai-api)。
 
 </details>
 

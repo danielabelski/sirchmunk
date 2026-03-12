@@ -262,6 +262,21 @@ asyncio.run(main())
   - References: https://github.com/BurntSushi/ripgrep | https://github.com/phiresky/ripgrep-all
 - Replace `"your-api-key"`, `"your-base-url"`, `"your-model-name"` and `/path/to/documents` with your actual values.
 
+<details>
+<summary><b>Using with MiniMax</b></summary>
+
+```python
+from sirchmunk.llm import OpenAIChat
+
+llm = OpenAIChat(
+    api_key="your-minimax-api-key",
+    base_url="https://api.minimax.io/v1",
+    model="MiniMax-M2.5"           # or "MiniMax-M2.5-highspeed"
+)
+```
+
+</details>
+
 
 ### Command Line Interface
 
@@ -814,10 +829,23 @@ Sirchmunk takes an **indexless approach**:
 <details>
 <summary><b>What LLM providers are supported?</b></summary>
 
-Any OpenAI-compatible API endpoint, including (but not limited too):
+Any OpenAI-compatible API endpoint, including (but not limited to):
 - OpenAI (GPT-5.2, ...)
+- [MiniMax](https://platform.minimax.io) (MiniMax-M2.5, MiniMax-M2.5-highspeed)
+- DeepSeek, Moonshot, Mistral, Groq, Together AI, Cohere
+- Google Gemini, Zhipu (GLM), Baichuan, Yi, SiliconFlow, Volcengine
+- Azure OpenAI
 - Local models served via Ollama, llama.cpp, vLLM, SGLang etc.
 - Claude via API proxy
+
+To use MiniMax, configure:
+```bash
+LLM_BASE_URL=https://api.minimax.io/v1
+LLM_API_KEY=your-minimax-api-key
+LLM_MODEL_NAME=MiniMax-M2.5
+```
+
+For more details, see [MiniMax OpenAI-Compatible API](https://platform.minimax.io/docs/api-reference/text-openai-api).
 
 </details>
 
