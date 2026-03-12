@@ -63,6 +63,11 @@ Data is a stream, not a snapshot.  **Sirchmunk** is **dynamic by design**, while
 **Sirchmunk** bridges massive local repositories and the web with **high-scale throughput** and **real-time awareness**. <br/>
 It serves as a unified intelligent hub for AI agents, delivering deep insights across vast datasets at the speed of thought.
 
+
+
+> For more technical details, refer to the [Sirchmunk blog](https://modelscope.github.io/sirchmunk-web/blog)
+
+
 ---
 
 ### Traditional RAG vs. Sirchmunk
