@@ -156,6 +156,11 @@ It serves as a unified intelligent hub for AI agents, delivering deep insights a
 
 ## 🎉 News
 
+* 🚀 **Mar 20, 2026**: Sirchmunk v0.0.6post1
+  - **OpenClaw skill**: Sirchmunk is now available as an [OpenClaw](https://openclaw.org/) skill on [ClawHub](https://clawhub.ai/wangxingjun778/sirchmunk) — any OpenClaw-compatible agent can search local files via natural language. See [openclaw-recipe](recipes/openclaw_skills/README.md) for details.
+  - **Search API**: New SSE streaming endpoint (`POST /api/v1/search/stream`) for real-time log output; concurrency control via `SIRCHMUNK_MAX_CONCURRENT_SEARCHES`; `paths` parameter now accepts both string and array, and is optional (falls back to `SIRCHMUNK_SEARCH_PATHS`).
+  - **Dependency fix**: `sirchmunk serve` no longer requires `sirchmunk[web]` — `uvicorn` is now a core dependency; `psutil` made optional.
+
 * 🚀 **Mar 12, 2026**: Sirchmunk v0.0.6
   - **Multi-turn conversation**: Context management with LLM query rewriting; configs `CHAT_HISTORY_MAX_TURNS` / `CHAT_HISTORY_MAX_TOKENS`; default search token budget 128K
   - **Document summarization & cross-lingual retrieval**: Summarization pipeline (chunk/merge/rerank), cross-lingual keyword extraction, chat-history relevance filtering

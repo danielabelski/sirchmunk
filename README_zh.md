@@ -152,6 +152,11 @@
 
 ## 🎉 News
 
+* 🚀 **2026年3月20日**: Sirchmunk v0.0.6post1
+  - **OpenClaw 技能**：Sirchmunk 已发布为 [OpenClaw](https://openclaw.org/) 技能，上架 [ClawHub](https://clawhub.ai/wangxingjun778/sirchmunk) — 任何兼容 OpenClaw 的 AI Agent均可通过自然语言搜索本地文件。详见 [openclaw-recipe](recipes/openclaw_skills/README.md)。
+  - **Search API**：新增 SSE 流式端点（`POST /api/v1/search/stream`），支持实时日志输出；通过 `SIRCHMUNK_MAX_CONCURRENT_SEARCHES` 控制并发；`paths` 参数同时支持字符串和数组，且为可选（回退到 `SIRCHMUNK_SEARCH_PATHS`）。
+  - **依赖修复**：`sirchmunk serve` 不再要求安装 `sirchmunk[web]` — `uvicorn` 已纳入核心依赖；`psutil` 改为可选。
+
 * 🚀 **2026年3月12日**: Sirchmunk v0.0.6
   - **多轮对话**：上下文管理与 LLM 查询重写；配置项 `CHAT_HISTORY_MAX_TURNS` / `CHAT_HISTORY_MAX_TOKENS`；搜索默认 token 预算 128K
   - **文档摘要与跨语言检索**：摘要流水线（分块/合并/重排）、跨语言关键词提取、聊天历史相关性过滤
