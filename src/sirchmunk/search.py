@@ -15,6 +15,7 @@ from sirchmunk.base import BaseSearch
 from sirchmunk.learnings.knowledge_base import KnowledgeBase
 from sirchmunk.llm.openai_chat import OpenAIChat
 from sirchmunk.llm.prompts import (
+    KEYWORD_QUERY_PLACEHOLDER,
     generate_keyword_extraction_prompt,
     FAST_QUERY_ANALYSIS,
     ROI_RESULT_SUMMARY,
@@ -1990,7 +1991,7 @@ class AgenticSearch(BaseSearch):
         """
         await self._logger.info("[Probe:Keywords] Extracting keywords...")
         dynamic_prompt = generate_keyword_extraction_prompt(num_levels=2)
-        keyword_prompt = dynamic_prompt.format(user_input=query)
+        keyword_prompt = dynamic_prompt.replace(KEYWORD_QUERY_PLACEHOLDER, query)
         kw_response = await self.llm.achat(
             messages=[{"role": "user", "content": keyword_prompt}],
             stream=False,

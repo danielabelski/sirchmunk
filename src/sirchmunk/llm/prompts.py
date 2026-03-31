@@ -31,6 +31,9 @@ Requirements:
 """
 
 
+KEYWORD_QUERY_PLACEHOLDER = "__SIRCHMUNK_USER_QUERY__"
+
+
 QUERY_KEYWORDS_EXTRACTION = """
 ### Role: Search Optimization Expert & Information Retrieval Specialist
 
@@ -67,11 +70,11 @@ Output {num_levels} separate JSON-like dicts within their respective tags, follo
 {output_format_example}
 
 <KEYWORDS_ALT>
-{{{{"translated_keyword1": idf_value, "translated_keyword2": idf_value}}}}
+{{"translated_keyword1": idf_value, "translated_keyword2": idf_value}}
 </KEYWORDS_ALT>
 
 ### User Query:
-{{user_input}}
+{query_placeholder}
 
 ### {num_levels}-Level Keywords (Coarse to Fine):
 """
@@ -81,14 +84,14 @@ def generate_keyword_extraction_prompt(num_levels: int = 3) -> str:
     """
     Generate a dynamic keyword extraction prompt template based on the number of levels.
     
-    The returned template still contains {{user_input}} placeholder that needs to be
-    filled in by the caller.
+    The returned template still contains a stable placeholder token that
+    needs to be replaced by the caller.
     
     Args:
         num_levels: Number of granularity levels (default: 3)
     
     Returns:
-        Prompt template string with {{user_input}} placeholder
+        Prompt template string with a query placeholder token
     """
     # Generate level descriptions with granularity focus
     level_descriptions = []
@@ -123,12 +126,14 @@ def generate_keyword_extraction_prompt(num_levels: int = 3) -> str:
             f"<KEYWORDS_LEVEL_{i}>\n{example_dict}\n</KEYWORDS_LEVEL_{i}>"
         )
     
-    # Format the template with num_levels, descriptions, and examples
-    # Note: {{user_input}} becomes {user_input} after this format call
+    # Format the template with num_levels, descriptions, and examples.
+    # The user query placeholder remains untouched and is replaced later
+    # with a simple string replace to avoid a fragile second `.format()`.
     return QUERY_KEYWORDS_EXTRACTION.format(
         num_levels=num_levels,
         level_descriptions="\n\n".join(level_descriptions),
-        output_format_example="\n\n".join(output_examples)
+        output_format_example="\n\n".join(output_examples),
+        query_placeholder=KEYWORD_QUERY_PLACEHOLDER,
     )
 
 
