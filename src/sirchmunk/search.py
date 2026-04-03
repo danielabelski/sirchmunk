@@ -1533,6 +1533,7 @@ class AgenticSearch(BaseSearch):
     }
     _FAST_CONTEXT_WINDOW = 30  # ± lines around each grep hit
     _FAST_MAX_EVIDENCE_CHARS = 15_000
+    _FAST_SMALL_FILE_THRESHOLD = 100_000  # 100K chars - read full file instead of grep sampling
 
     async def _search_fast(
         self,
@@ -1720,13 +1721,38 @@ class AgenticSearch(BaseSearch):
         for bf in best_files:
             if total_evidence_chars >= self._FAST_MAX_EVIDENCE_CHARS:
                 break
-            ev = await self._fast_sample_evidence(bf["path"], bf.get("matches", []))
+
+            file_path = bf["path"]
+            fname = Path(file_path).name
+            ext = Path(file_path).suffix.lower()
+
+            # Small file short-circuit: read full content instead of grep sampling
+            ev = None
+            if ext in self._FAST_TEXT_EXTENSIONS:
+                try:
+                    file_size = Path(file_path).stat().st_size
+                    if file_size < self._FAST_SMALL_FILE_THRESHOLD:
+                        full_text = Path(file_path).read_text(errors="replace")
+                        if len(full_text) < self._FAST_SMALL_FILE_THRESHOLD:
+                            ev = f"[{fname}]\n{full_text}"
+                            await self._logger.info(
+                                f"[FAST] Small file short-circuit: reading full content of {fname} "
+                                f"({len(full_text)} chars)"
+                            )
+                except Exception:
+                    pass  # Fall through to normal evidence extraction
+
+            # Normal path: grep-based evidence sampling
+            if ev is None:
+                ev = await self._fast_sample_evidence(file_path, bf.get("matches", []))
+
             if ev:
                 remaining = self._FAST_MAX_EVIDENCE_CHARS - total_evidence_chars
                 chunk = ev[:remaining]
                 evidence_parts.append(chunk)
                 total_evidence_chars += len(chunk)
-                context.mark_file_read(bf["path"])
+                context.mark_file_read(file_path)
+
         evidence = "\n\n---\n\n".join(evidence_parts)
 
         if not evidence or len(evidence.strip()) < 20:
@@ -1793,6 +1819,127 @@ class AgenticSearch(BaseSearch):
             elif item_type == "end":
                 current_path = None
         return counts
+
+    @staticmethod
+    def _dedup_merged_files(
+        merged: List[Dict[str, Any]],
+        per_file_kw_tf: Dict[str, Dict[str, int]],
+        match_limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Deduplicate merged file entries by path, combining matches from
+        multiple keyword searches into a single entry per file.
+
+        When the same file appears in multiple rga begin/end groups (one per
+        keyword search), this merges them so downstream scoring and evidence
+        extraction operate on a single, complete representation.
+
+        Args:
+            merged: File entries from GrepRetriever.merge_results(), may
+                contain duplicates.
+            per_file_kw_tf: Pre-computed per-file keyword TF counts (not
+                modified, used only for reference).
+            match_limit: Maximum matches to keep per file after merging.
+
+        Returns:
+            Deduplicated list with one entry per unique file path.
+        """
+        if not merged:
+            return merged
+
+        seen: Dict[str, int] = {}  # path -> index in deduped
+        deduped: List[Dict[str, Any]] = []
+
+        for entry in merged:
+            fpath = entry["path"]
+            if fpath in seen:
+                # Merge into existing entry
+                idx = seen[fpath]
+                existing = deduped[idx]
+                existing["matches"].extend(entry.get("matches", []))
+                existing["lines"].extend(entry.get("lines", []))
+                existing["total_matches"] += entry.get("total_matches", 0)
+            else:
+                # New file — clone to avoid mutating original
+                seen[fpath] = len(deduped)
+                deduped.append({
+                    "path": fpath,
+                    "matches": list(entry.get("matches", [])),
+                    "lines": list(entry.get("lines", [])),
+                    "total_matches": entry.get("total_matches", 0),
+                    "total_score": entry.get("total_score", 0.0),
+                })
+
+        # Trim matches to limit per file
+        for entry in deduped:
+            if len(entry["matches"]) > match_limit:
+                # Sort by score descending, keep top
+                entry["matches"].sort(
+                    key=lambda x: x.get("score", 0.0), reverse=True
+                )
+                entry["matches"] = entry["matches"][:match_limit]
+
+        return deduped
+
+    @staticmethod
+    def _prune_by_score(
+        candidates: List[Dict[str, Any]],
+        top_k: int = 3,
+        relative_ratio: float = 0.30,
+        gap_ratio: float = 0.50,
+        min_count: int = 1,
+    ) -> List[Dict[str, Any]]:
+        """Dynamically prune ranked file candidates by score distribution.
+
+        Applies a three-stage filter to remove clearly irrelevant files:
+
+        1. **Relative threshold**: Discard files scoring below
+           ``max_score * relative_ratio`` (default 30%).
+        2. **Gap detection**: Scan adjacently ranked files; when the score
+           drop from one to the next exceeds ``prev_score * gap_ratio``
+           (default 50%), truncate the list at that point.
+        3. **Minimum guarantee**: Ensure at least ``min_count`` files
+           survive (default 1).
+
+        Finally the result is capped at ``top_k``.
+
+        Args:
+            candidates: File dicts sorted by ``weighted_score`` descending.
+            top_k: Maximum number of files to return.
+            relative_ratio: Fraction of the top score used as a floor.
+            gap_ratio: Maximum tolerated relative drop between adjacent
+                candidates.
+            min_count: Minimum number of candidates to keep regardless of
+                score.
+
+        Returns:
+            Pruned list of candidates (length in [min_count, top_k]).
+        """
+        if not candidates:
+            return []
+
+        max_score = candidates[0].get("weighted_score", 0.0)
+
+        # Step 1: Relative threshold filter
+        threshold = max_score * relative_ratio
+        filtered = [f for f in candidates if f.get("weighted_score", 0.0) >= threshold]
+        if not filtered:
+            filtered = candidates[:min_count]
+
+        # Step 2: Gap detection truncation
+        result = [filtered[0]]
+        for i in range(1, len(filtered)):
+            prev_score = filtered[i - 1].get("weighted_score", 0.0)
+            curr_score = filtered[i].get("weighted_score", 0.0)
+            if prev_score > 0 and (prev_score - curr_score) > prev_score * gap_ratio:
+                break
+            result.append(filtered[i])
+
+        # Step 3: Minimum guarantee
+        if len(result) < min_count and len(filtered) >= min_count:
+            result = filtered[:min_count]
+
+        # Cap at top_k
+        return result[:top_k]
 
     async def _fast_find_best_file(
         self,
@@ -1879,6 +2026,9 @@ class AgenticSearch(BaseSearch):
         if not merged:
             return None
 
+        # Deduplicate file entries from multi-keyword searches
+        merged = self._dedup_merged_files(merged, per_file_kw_tf)
+
         # --- IDF × (1 + log TF) weighted scoring ---
         _idfs = keyword_idfs or {}
         for f in merged:
@@ -1893,7 +2043,9 @@ class AgenticSearch(BaseSearch):
             f["weighted_score"] = score
 
         merged.sort(key=lambda f: f["weighted_score"], reverse=True)
-        return merged[:top_k] if merged else None
+        pruned = self._prune_by_score(merged, top_k=top_k)
+
+        return pruned if pruned else None
 
     async def _fast_sample_evidence(
         self,
