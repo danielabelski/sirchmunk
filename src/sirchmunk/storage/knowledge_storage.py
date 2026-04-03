@@ -1006,11 +1006,43 @@ class KnowledgeStorage:
             logger.error(f"Failed to store embedding for cluster {cluster_id}: {e}")
             return False
 
+    @staticmethod
+    def _compute_path_coverage(
+        cluster_files: List[str],
+        search_paths: List[str],
+    ) -> float:
+        """Compute the fraction of a cluster's source files within the requested scope.
+
+        For each file in *cluster_files*, checks whether it is a descendant of
+        any directory in *search_paths* (prefix match on normalised paths).
+
+        Args:
+            cluster_files: File paths stored in the cluster's ``search_results``.
+            search_paths: Directories the current search is scoped to.
+
+        Returns:
+            Coverage ratio in [0.0, 1.0].  Returns 0.0 when *cluster_files*
+            is empty (unknown scope cannot be trusted).
+        """
+        if not cluster_files or not search_paths:
+            return 0.0
+
+        normalised_scopes = [os.path.normpath(p) + os.sep for p in search_paths]
+        covered = 0
+        for fp in cluster_files:
+            norm_fp = os.path.normpath(fp)
+            if any(norm_fp.startswith(scope) or norm_fp == scope.rstrip(os.sep)
+                   for scope in normalised_scopes):
+                covered += 1
+
+        return covered / len(cluster_files)
+
     async def search_similar_clusters(
         self,
         query_embedding: List[float],
         top_k: int = 3,
-        similarity_threshold: float = 0.82
+        similarity_threshold: float = 0.82,
+        search_paths: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """
         Search for similar clusters using vector similarity.
@@ -1019,6 +1051,9 @@ class KnowledgeStorage:
             query_embedding: 384-dim query embedding vector
             top_k: Maximum number of results to return
             similarity_threshold: Minimum cosine similarity threshold
+            search_paths: Optional list of directory paths to scope the search.
+                          Clusters whose source files don't overlap sufficiently
+                          with these paths are filtered out.
 
         Returns:
             List of similar clusters with metadata and similarity scores
@@ -1049,7 +1084,7 @@ class KnowledgeStorage:
             # how the table was created (fresh schema vs parquet import).
             query = f"""
             SELECT
-                id, name, description, confidence, hotness,
+                id, name, description, confidence, hotness, search_results,
                 list_cosine_similarity(
                     embedding_vector::FLOAT[384],
                     ?::FLOAT[384]
@@ -1065,7 +1100,7 @@ class KnowledgeStorage:
             # Filter by similarity threshold
             filtered_results = []
             for row in results:
-                similarity = row[5]
+                similarity = row[6]  # shifted by search_results at index 5
                 if similarity is not None and similarity >= similarity_threshold:
                     filtered_results.append({
                         "id": row[0],
@@ -1073,8 +1108,31 @@ class KnowledgeStorage:
                         "description": row[2],
                         "confidence": row[3],
                         "hotness": row[4],
+                        "search_results": row[5],  # JSON string or None
                         "similarity": similarity
                     })
+
+            # Path-scope filter: reject clusters whose source files
+            # don't overlap sufficiently with the requested search paths.
+            if search_paths and filtered_results:
+                pre_count = len(filtered_results)
+                scope_checked = []
+                for candidate in filtered_results:
+                    raw_sr = candidate.get("search_results")
+                    cluster_files = []
+                    if raw_sr:
+                        try:
+                            cluster_files = json.loads(raw_sr) if isinstance(raw_sr, str) else raw_sr
+                        except (json.JSONDecodeError, TypeError):
+                            cluster_files = []
+                    coverage = self._compute_path_coverage(cluster_files, search_paths)
+                    if coverage >= 0.5:
+                        scope_checked.append(candidate)
+                filtered_results = scope_checked
+                logger.debug(
+                    f"Path-scope filter: {pre_count} candidates -> "
+                    f"{len(filtered_results)} after coverage check (paths={search_paths})"
+                )
 
             logger.debug(
                 f"Similarity search: {emb_count} embedded clusters, "
