@@ -1027,13 +1027,18 @@ class KnowledgeStorage:
         if not cluster_files or not search_paths:
             return 0.0
 
-        normalised_scopes = [os.path.normpath(p) + os.sep for p in search_paths]
+        normalised_scopes = [Path(p) for p in search_paths]
         covered = 0
         for fp in cluster_files:
-            norm_fp = os.path.normpath(fp)
-            if any(norm_fp.startswith(scope) or norm_fp == scope.rstrip(os.sep)
-                   for scope in normalised_scopes):
-                covered += 1
+            path_fp = Path(fp)
+            for scope in normalised_scopes:
+                try:
+                    path_fp.relative_to(scope)
+                    covered += 1
+                    break
+                except ValueError:
+                    # Not a subpath or incompatible paths (e.g., different drives on Windows)
+                    continue
 
         return covered / len(cluster_files)
 
