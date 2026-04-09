@@ -61,6 +61,11 @@ def _load_env_file(env_file: Path) -> bool:
     try:
         from dotenv import load_dotenv
         load_dotenv(env_file, override=False)
+        # Expand ~ in path-related values loaded by dotenv
+        for key in ("SIRCHMUNK_WORK_PATH", "EMBEDDING_CACHE_DIR"):
+            val = os.environ.get(key)
+            if val and "~" in val:
+                os.environ[key] = os.path.expanduser(val)
         return True
     except ImportError:
         # Fallback: manual parsing if python-dotenv not installed
@@ -73,7 +78,7 @@ def _load_env_file(env_file: Path) -> bool:
                         key = key.strip()
                         value = value.strip().strip('"').strip("'")
                         if key and key not in os.environ:
-                            os.environ[key] = value
+                            os.environ[key] = os.path.expanduser(value)
             return True
         except Exception:
             return False

@@ -40,6 +40,8 @@ class EmbeddingUtil:
     ):
         self.model_id = model_id or os.getenv("EMBEDDING_MODEL_ID", self.DEFAULT_MODEL_ID)
         self._cache_dir = cache_dir or os.getenv("EMBEDDING_CACHE_DIR")
+        if self._cache_dir:
+            self._cache_dir = os.path.expanduser(self._cache_dir)
         self.model = None
 
         # Defer torch import to the background thread to avoid blocking

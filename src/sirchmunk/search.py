@@ -162,7 +162,7 @@ class AgenticSearch(BaseSearch):
                 else:
                     embedding_cache = os.getenv("EMBEDDING_CACHE_DIR")
                     cache_dir = (
-                        embedding_cache
+                        os.path.expanduser(embedding_cache)
                         if embedding_cache
                         else str(self.work_path / ".cache" / "models")
                     )
