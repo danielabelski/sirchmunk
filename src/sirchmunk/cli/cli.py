@@ -84,13 +84,14 @@ def _load_env_file(env_file: Path) -> bool:
             return False
 
 
-def _generate_env_file(env_file: Path):
+def _generate_env_file(env_file: Path, work_path: Path):
     """Generate a default .env configuration file.
 
     The single .env is shared by both the web API server and the MCP server.
 
     Args:
         env_file: Path to write the .env file
+        work_path: Resolved working directory path (written into the file)
     """
     content = """\
 # ===== Sirchmunk Configuration =====
@@ -179,6 +180,15 @@ EMBEDDING_MODEL_ID=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 EMBEDDING_CACHE_DIR=${SIRCHMUNK_WORK_PATH}/.cache/models
 """
 
+    # Replace default paths with actual work_path
+    content = content.replace(
+        "SIRCHMUNK_WORK_PATH=~/.sirchmunk",
+        f"SIRCHMUNK_WORK_PATH={work_path}",
+    )
+    content = content.replace(
+        "EMBEDDING_CACHE_DIR=${SIRCHMUNK_WORK_PATH}/.cache/models",
+        f"EMBEDDING_CACHE_DIR={work_path / '.cache' / 'models'}",
+    )
     with open(env_file, "w") as f:
         f.write(content)
 
@@ -248,7 +258,7 @@ def _run_base_init(work_path: Path) -> int:
     # Generate default .env file if not exists
     env_file = work_path / ".env"
     if not env_file.exists():
-        _generate_env_file(env_file)
+        _generate_env_file(env_file, work_path)
         print(f"  ✓ Generated {env_file}")
     else:
         print(f"  • Skipped {env_file} (already exists)")
@@ -304,7 +314,10 @@ def _run_base_init(work_path: Path) -> int:
     try:
         from sirchmunk.utils.embedding_util import EmbeddingUtil
 
-        model_cache_dir = os.getenv("EMBEDDING_CACHE_DIR", str(work_path / ".cache" / "models"))
+        model_cache_dir = os.getenv("EMBEDDING_CACHE_DIR", "")
+        # Guard against unexpanded shell variable syntax from old .env files
+        if not model_cache_dir or "${" in model_cache_dir:
+            model_cache_dir = str(work_path / ".cache" / "models")
         # Read embedding model id from environment or use default
         embedding_model_id = os.getenv("EMBEDDING_MODEL_ID", EmbeddingUtil.DEFAULT_MODEL_ID)
         model_dir = EmbeddingUtil.preload_model(
