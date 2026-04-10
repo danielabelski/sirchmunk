@@ -83,6 +83,11 @@ def _load_env_file(env_file: Path) -> bool:
                                 os.environ[key] = os.path.expanduser(value)
                             else:
                                 os.environ[key] = value
+            # Expand ~ in path keys regardless of source (matching dotenv block behavior)
+            for key in _PATH_KEYS:
+                val = os.environ.get(key)
+                if val and "~" in val:
+                    os.environ[key] = os.path.expanduser(val)
             return True
         except Exception:
             return False
