@@ -25,6 +25,7 @@ from sirchmunk.search import AgenticSearch
 from sirchmunk.llm.openai_chat import OpenAIChat
 from sirchmunk.api.components.history_storage import HistoryStorage
 from sirchmunk.api.components.monitor_tracker import llm_usage_tracker
+from sirchmunk.api.security import is_path_allowed, verify_ws_token, detect_prompt_injection
 
 logger = logging.getLogger(__name__)
 
@@ -251,13 +252,21 @@ history_storage = HistoryStorage()
 chat_sessions = {}
 
 # Active WebSocket connections
+_MAX_WS_CONNECTIONS = int(os.getenv("SIRCHMUNK_MAX_WS_CONNECTIONS", "100"))
+
+
 class ChatConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
 
-    async def connect(self, websocket: WebSocket):
+    async def connect(self, websocket: WebSocket) -> bool:
+        """Accept a WebSocket connection if capacity allows."""
+        if len(self.active_connections) >= _MAX_WS_CONNECTIONS:
+            await websocket.close(code=1013, reason="Server at capacity")
+            return False
         await websocket.accept()
         self.active_connections.append(websocket)
+        return True
 
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
@@ -479,7 +488,7 @@ def get_envs() -> Dict[str, Any]:
     api_key = os.getenv("LLM_API_KEY", "")
     model_name = os.getenv("LLM_MODEL_NAME", "gpt-5.2")
 
-    print(f"[ENV CONFIG] base_url={base_url}, model_name={model_name}, api_key={'***' if api_key else '(not set)'}")
+    logger.debug("LLM config loaded: base_url=%s, model=%s", base_url, model_name)
 
     return dict(
         base_url=base_url,
@@ -518,7 +527,7 @@ def get_search_instance(log_callback=None):
     try:
         envs = get_envs()
     except Exception as e:
-        print(f"[WARNING] Please config ENVs: LLM_BASE_URL, LLM_API_KEY, LLM_MODEL_NAME. Error: {e}")
+        logger.warning("LLM configuration incomplete, check LLM_BASE_URL/LLM_API_KEY/LLM_MODEL_NAME")
         envs = {
             "base_url": os.getenv("LLM_BASE_URL", "https://api.openai.com/v1"),
             "api_key": os.getenv("LLM_API_KEY", ""),
@@ -637,7 +646,7 @@ def open_file_dialog(dialog_type: str = "files", multiple: bool = True) -> List[
             selected_paths = [res] if res else []
 
     except Exception as e:
-        print(f"Dialog Error: {e}")
+        logger.warning("File dialog error")
         selected_paths = []
 
     finally:
@@ -1104,7 +1113,14 @@ async def chat_websocket(websocket: WebSocket):
     3. Chat + Web Search: enable_rag=False, enable_web_search=True (mock)
     4. Chat + RAG + Web Search: enable_rag=True, enable_web_search=True (RAG real, web mock)
     """
-    await manager.connect(websocket)
+    # Auth check
+    if not verify_ws_token(websocket):
+        await websocket.close(code=1008, reason="Unauthorized")
+        return
+    # Connection limit check
+    connected = await manager.connect(websocket)
+    if not connected:
+        return
     
     try:
         while True:
@@ -1120,10 +1136,16 @@ async def chat_websocket(websocket: WebSocket):
             enable_web_search = request_data.get("enable_web_search", False)
             search_mode = request_data.get("search_mode", "FAST")
 
-            print(f"\n{'='*60}")
-            print(f"[CHAT REQUEST] Message: {message[:50]}...")
-            print(f"[CHAT REQUEST] KB: {kb_name}, RAG: {enable_rag}, Web: {enable_web_search}, Mode: {search_mode}")
-            print(f"{'='*60}\n")
+            # Prompt injection detection
+            if detect_prompt_injection(message):
+                await manager.send_personal_message(json.dumps({
+                    "type": "warning",
+                    "message": "Your query contains potentially unsafe patterns and has been filtered."
+                }), websocket)
+                logger.warning("Prompt injection attempt detected")
+                continue  # skip this message, go back to waiting for next WS message
+
+            logger.debug("Chat request: rag=%s, mode=%s", enable_rag, search_mode)
             
             # Generate or use existing session ID
             if not session_id:
@@ -1259,13 +1281,12 @@ async def chat_websocket(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     except Exception as e:
-        print(f"[ERROR] WebSocket error: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.error("WebSocket error occurred")
+        logger.exception("WebSocket exception details")
         try:
             await manager.send_personal_message(json.dumps({
                 "type": "error",
-                "message": f"An error occurred: {str(e)}"
+                "message": "An internal error occurred. Please try again."
             }), websocket)
         except:
             pass
@@ -1346,10 +1367,12 @@ async def browse_files(path: str = "/", show_hidden: bool = False):
     """List files and directories at the given path (headless-safe alternative to Tkinter)"""
     try:
         abs_path = os.path.abspath(path)
+        if not is_path_allowed(abs_path):
+            return {"success": False, "error": "Access denied: path not in allowed list"}
         if not os.path.exists(abs_path):
-            return {"success": False, "error": f"Path does not exist: {abs_path}"}
+            return {"success": False, "error": "Path does not exist"}
         if not os.path.isdir(abs_path):
-            return {"success": False, "error": f"Path is not a directory: {abs_path}"}
+            return {"success": False, "error": "Path is not a directory"}
 
         items = []
         for entry in os.scandir(abs_path):
@@ -1378,7 +1401,7 @@ async def browse_files(path: str = "/", show_hidden: bool = False):
             }
         }
     except PermissionError:
-        return {"success": False, "error": f"Permission denied: {abs_path}"}
+        return {"success": False, "error": "Permission denied"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 

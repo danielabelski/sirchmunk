@@ -1,7 +1,52 @@
 "use client";
 
 import React, { useState, useRef, useCallback } from "react";
-import { apiUrl } from "../lib/api";
+
+// File System Access API types for drag-and-drop folder support
+interface FileSystemEntry {
+  isFile: boolean;
+  isDirectory: boolean;
+  name: string;
+}
+interface FileSystemFileEntry extends FileSystemEntry {
+  file(successCallback: (file: File) => void, errorCallback?: (error: Error) => void): void;
+}
+interface FileSystemDirectoryEntry extends FileSystemEntry {
+  createReader(): FileSystemDirectoryReader;
+}
+interface FileSystemDirectoryReader {
+  readEntries(successCallback: (entries: FileSystemEntry[]) => void, errorCallback?: (error: Error) => void): void;
+}
+
+async function readAllEntries(entries: FileSystemEntry[]): Promise<File[]> {
+  const files: File[] = [];
+
+  async function processEntry(entry: FileSystemEntry): Promise<void> {
+    if (entry.isFile) {
+      const file = await new Promise<File>((resolve, reject) => {
+        (entry as FileSystemFileEntry).file(resolve, reject);
+      });
+      files.push(file);
+    } else if (entry.isDirectory) {
+      const reader = (entry as FileSystemDirectoryEntry).createReader();
+      let batch: FileSystemEntry[];
+      do {
+        batch = await new Promise<FileSystemEntry[]>((resolve, reject) => {
+          reader.readEntries(resolve, reject);
+        });
+        for (const child of batch) {
+          await processEntry(child);
+        }
+      } while (batch.length > 0);
+    }
+  }
+
+  for (const entry of entries) {
+    await processEntry(entry);
+  }
+  return files;
+}
+import { apiUrl, getAuthHeaders } from "../lib/api";
 
 interface UploadedFile {
   file_id: string;
@@ -38,6 +83,7 @@ export default function FileUpload({
   onUploadComplete,
 }: FileUploadProps) {
   const [collection, setCollection] = useState("default");
+  const [uploadMode, setUploadMode] = useState<"files" | "folder">("files");
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -59,10 +105,30 @@ export default function FileUpload({
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    const droppedFiles = Array.from(e.dataTransfer.files);
-    setSelectedFiles((prev) => [...prev, ...droppedFiles]);
     setResult(null);
     setError(null);
+
+    // Extract entries synchronously before the event is garbage-collected
+    const items = Array.from(e.dataTransfer.items);
+    const entries: FileSystemEntry[] = [];
+    for (const item of items) {
+      const entry = (item as any).webkitGetAsEntry?.() as FileSystemEntry | null;
+      if (entry) entries.push(entry);
+    }
+
+    if (entries.length > 0) {
+      readAllEntries(entries).then((files) => {
+        if (files.length > 0) {
+          setSelectedFiles((prev) => [...prev, ...files]);
+        }
+      });
+    } else {
+      // Fallback: use dataTransfer.files directly
+      const droppedFiles = Array.from(e.dataTransfer.files);
+      if (droppedFiles.length > 0) {
+        setSelectedFiles((prev) => [...prev, ...droppedFiles]);
+      }
+    }
   }, []);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -103,6 +169,7 @@ export default function FileUpload({
     try {
       const resp = await fetch(apiUrl("/api/v1/files/upload"), {
         method: "POST",
+        headers: { ...getAuthHeaders() },
         body: formData,
       });
 
@@ -176,6 +243,30 @@ export default function FileUpload({
             </p>
           </div>
 
+          {/* Upload Mode Toggle */}
+          <div className="flex gap-2 mb-3">
+            <button
+              onClick={() => setUploadMode("files")}
+              className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${
+                uploadMode === "files"
+                  ? "bg-blue-500 text-white"
+                  : "bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+              }`}
+            >
+              Files
+            </button>
+            <button
+              onClick={() => setUploadMode("folder")}
+              className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${
+                uploadMode === "folder"
+                  ? "bg-blue-500 text-white"
+                  : "bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+              }`}
+            >
+              Folder
+            </button>
+          </div>
+
           {/* Drop Zone */}
           <div
             onDragOver={handleDragOver}
@@ -192,18 +283,22 @@ export default function FileUpload({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
             </svg>
             <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
-              Drag and drop files here, or click to select
+              {uploadMode === "folder"
+                ? "Drag and drop a folder here, or click to select"
+                : "Drag and drop files here, or click to select"}
             </p>
             <p className="mt-1 text-xs text-gray-500">
               PDF, DOCX, XLSX, TXT, MD, CSV, JSON, HTML, XML, PPTX
             </p>
             <input
+              key={uploadMode}
               ref={fileInputRef}
               type="file"
               multiple
               onChange={handleFileSelect}
               className="hidden"
               accept=".pdf,.docx,.doc,.xlsx,.xls,.pptx,.txt,.md,.csv,.json,.html,.xml,.rtf,.epub,.yaml,.yml,.log,.tsv"
+              {...(uploadMode === "folder" ? { webkitdirectory: "", directory: "" } as any : {})}
             />
           </div>
 

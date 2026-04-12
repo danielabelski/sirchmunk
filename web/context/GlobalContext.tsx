@@ -7,7 +7,7 @@ import React, {
   useState,
   useEffect,
 } from "react";
-import { wsUrl, apiUrl } from "@/lib/api";
+import { wsUrl, apiUrl, getAuthHeaders } from "@/lib/api";
 import {
   initializeTheme,
   setTheme as setThemeLib,
@@ -218,7 +218,7 @@ export function GlobalProvider({ children }: { children: React.ReactNode }) {
 
   const refreshSettings = async () => {
     try {
-      const response = await fetch(apiUrl("/api/v1/settings/ui"));
+      const response = await fetch(apiUrl("/api/v1/settings/ui"), { headers: { ...getAuthHeaders() } });
       if (response.ok) {
         const result = await response.json();
         if (result.success && result.data) {
@@ -367,7 +367,11 @@ export function GlobalProvider({ children }: { children: React.ReactNode }) {
       },
     }));
 
-    const ws = new WebSocket(wsUrl("/api/v1/question/ws"));
+    const token = typeof window !== "undefined" ? localStorage.getItem("sirchmunk_api_token") || "" : "";
+    const wsUrlWithToken = token
+      ? `${wsUrl("/api/v1/question/ws")}?token=${encodeURIComponent(token)}`
+      : wsUrl("/api/v1/question/ws");
+    const ws = new WebSocket(wsUrlWithToken);
     questionWs.current = ws;
 
     ws.onopen = () => {
@@ -494,7 +498,11 @@ export function GlobalProvider({ children }: { children: React.ReactNode }) {
       },
     }));
 
-    const ws = new WebSocket(wsUrl("/api/v1/question/mimic"));
+    const token2 = typeof window !== "undefined" ? localStorage.getItem("sirchmunk_api_token") || "" : "";
+    const mimicWsUrl = token2
+      ? `${wsUrl("/api/v1/question/mimic")}?token=${encodeURIComponent(token2)}`
+      : wsUrl("/api/v1/question/mimic");
+    const ws = new WebSocket(mimicWsUrl);
     questionWs.current = ws;
 
     ws.onopen = () => {
@@ -642,7 +650,11 @@ export function GlobalProvider({ children }: { children: React.ReactNode }) {
       chatWs.current.close();
     }
 
-    const ws = new WebSocket(wsUrl("/api/v1/chat"));
+    const chatToken = typeof window !== "undefined" ? localStorage.getItem("sirchmunk_api_token") || "" : "";
+    const chatWsUrl = chatToken
+      ? `${wsUrl("/api/v1/chat")}?token=${encodeURIComponent(chatToken)}`
+      : wsUrl("/api/v1/chat");
+    const ws = new WebSocket(chatWsUrl);
     chatWs.current = ws;
 
     let assistantMessage = "";
@@ -901,6 +913,7 @@ export function GlobalProvider({ children }: { children: React.ReactNode }) {
     try {
       const response = await fetch(
         apiUrl(`/api/v1/chat/sessions/${sessionId}`),
+        { headers: { ...getAuthHeaders() } },
       );
       if (response.ok) {
         const data = await response.json();

@@ -1778,7 +1778,6 @@ class AgenticSearch(BaseSearch):
             else:
                 await self._logger.warning(
                     f"[FAST:Step2] No matching files found in paths: {paths}. "
-                    "If files are PDFs/DOCX, ensure poppler-utils and pandoc are installed."
                 )
                 return _NO_RESULTS_MESSAGE, None, context
 

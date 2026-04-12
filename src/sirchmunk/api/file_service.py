@@ -18,6 +18,8 @@ from typing import List, Optional, Tuple
 
 from pydantic import BaseModel
 
+from .security import sanitize_filename
+
 
 # ---------------------------------------------------------------------------
 # Pydantic Models
@@ -190,6 +192,7 @@ class FileStorageService:
     ) -> FileMetadata:
         """Save an uploaded file into *collection*, returning its metadata."""
         self.validate_collection_name(collection)
+        filename = sanitize_filename(filename)  # Security: strip path traversal and dangerous chars
         self.validate_file(filename, len(content))
         self._check_total_quota(len(content))
 

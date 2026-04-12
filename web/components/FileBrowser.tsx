@@ -11,7 +11,7 @@ import {
   HardDrive,
   X,
 } from "lucide-react";
-import { apiUrl } from "@/lib/api";
+import { apiUrl, getAuthHeaders } from "@/lib/api";
 
 interface FileItem {
   name: string;
@@ -52,7 +52,8 @@ export default function FileBrowser({ mode, onSelect, onCancel, t }: FileBrowser
     setSelectedItem(null);
     try {
       const res = await fetch(
-        apiUrl(`/api/v1/file-browser?path=${encodeURIComponent(path)}&show_hidden=${showHidden}`)
+        apiUrl(`/api/v1/file-browser?path=${encodeURIComponent(path)}&show_hidden=${showHidden}`),
+        { headers: { ...getAuthHeaders() } }
       );
       const result = await res.json();
       if (result.success) {

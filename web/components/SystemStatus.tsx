@@ -13,7 +13,7 @@ import {
   XCircle,
   RefreshCw,
 } from "lucide-react";
-import { apiUrl } from "@/lib/api";
+import { apiUrl, getAuthHeaders } from "@/lib/api";
 
 interface SystemStatusData {
   backend: {
@@ -90,6 +90,7 @@ export default function SystemStatus() {
 
         const response = await fetch(apiUrl("/api/v1/monitor/status"), {
           method: "GET",
+          headers: { ...getAuthHeaders() },
           signal: controller.signal,
         });
 
@@ -116,7 +117,7 @@ export default function SystemStatus() {
 
   const fetchSystemStatus = async () => {
     try {
-      const response = await fetch(apiUrl("/api/v1/system/status"));
+      const response = await fetch(apiUrl("/api/v1/system/status"), { headers: { ...getAuthHeaders() } });
       if (response.ok) {
         const data = await response.json();
         setStatusData(data);
@@ -133,6 +134,7 @@ export default function SystemStatus() {
     try {
       const response = await fetch(apiUrl(`/api/v1/system/test/${modelType}`), {
         method: "POST",
+        headers: { ...getAuthHeaders() },
       });
 
       const result: TestResult = await response.json();

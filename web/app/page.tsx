@@ -33,7 +33,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { useGlobal } from "@/context/GlobalContext";
-import { apiUrl } from "@/lib/api";
+import { apiUrl, getAuthHeaders } from "@/lib/api";
 import { processLatexContent } from "@/lib/latex";
 import { getTranslation, type Language } from "@/lib/i18n";
 import FileBrowser from "@/components/FileBrowser";
@@ -104,7 +104,7 @@ export default function HomePage() {
 
   // Fetch knowledge bases
   useEffect(() => {
-    fetch(apiUrl("/api/v1/knowledge/list"))
+    fetch(apiUrl("/api/v1/knowledge/list"), { headers: { ...getAuthHeaders() } })
       .then((res) => res.json())
       .then((response) => {
         // Handle API response structure
@@ -126,7 +126,7 @@ export default function HomePage() {
 
   // Sync file selector with SIRCHMUNK_SEARCH_PATHS from .env
   useEffect(() => {
-    fetch(apiUrl("/api/v1/settings/environment"))
+    fetch(apiUrl("/api/v1/settings/environment"), { headers: { ...getAuthHeaders() } })
       .then((res) => res.json())
       .then((result) => {
         if (result.success && result.data?.SIRCHMUNK_SEARCH_PATHS) {
@@ -154,7 +154,7 @@ export default function HomePage() {
 
   // Check if Tkinter file picker is available (will be false in Docker)
   useEffect(() => {
-    fetch(apiUrl("/api/v1/file-picker/status"))
+    fetch(apiUrl("/api/v1/file-picker/status"), { headers: { ...getAuthHeaders() } })
       .then((res) => res.json())
       .then((result) => {
         if (result.success) {
@@ -225,7 +225,8 @@ export default function HomePage() {
 
     try {
       const response = await fetch(
-        apiUrl(`/api/v1/search/suggestions?kb_name=${encodeURIComponent(chatState.selectedKb)}&query=${encodeURIComponent(query)}&limit=8`)
+        apiUrl(`/api/v1/search/suggestions?kb_name=${encodeURIComponent(chatState.selectedKb)}&query=${encodeURIComponent(query)}&limit=8`),
+        { headers: { ...getAuthHeaders() } }
       );
       if (!response.ok) {
         setSearchSuggestions([]);
@@ -418,6 +419,7 @@ export default function HomePage() {
                       method: "POST",
                       headers: {
                         "Content-Type": "application/json",
+                        ...getAuthHeaders(),
                       },
                       body: JSON.stringify({
                         type: "files",
@@ -462,6 +464,7 @@ export default function HomePage() {
                       method: "POST",
                       headers: {
                         "Content-Type": "application/json",
+                        ...getAuthHeaders(),
                       },
                       body: JSON.stringify({
                         type: "directory",

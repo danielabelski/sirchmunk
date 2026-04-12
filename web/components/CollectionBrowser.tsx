@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { apiUrl } from "../lib/api";
+import { apiUrl, getAuthHeaders } from "../lib/api";
 
 interface Collection {
   name: string;
@@ -62,8 +62,8 @@ export default function CollectionBrowser({
     setError(null);
     try {
       const [colResp, usageResp] = await Promise.all([
-        fetch(apiUrl("/api/v1/files/collections")),
-        fetch(apiUrl("/api/v1/files/usage")),
+        fetch(apiUrl("/api/v1/files/collections"), { headers: { ...getAuthHeaders() } }),
+        fetch(apiUrl("/api/v1/files/usage"), { headers: { ...getAuthHeaders() } }),
       ]);
       const colData = await colResp.json();
       const usageData = await usageResp.json();
@@ -92,7 +92,7 @@ export default function CollectionBrowser({
   const handleSelect = async (name: string) => {
     setSelecting(name);
     try {
-      const resp = await fetch(apiUrl(`/api/v1/files/collections/${name}/path`));
+      const resp = await fetch(apiUrl(`/api/v1/files/collections/${name}/path`), { headers: { ...getAuthHeaders() } });
       const data = await resp.json();
       if (data.success) {
         onSelectPath(data.data.path);
@@ -115,6 +115,7 @@ export default function CollectionBrowser({
     try {
       const resp = await fetch(apiUrl(`/api/v1/files/collections/${name}`), {
         method: "DELETE",
+        headers: { ...getAuthHeaders() },
       });
       const data = await resp.json();
       if (data.success) {

@@ -38,10 +38,16 @@ if _env_file.exists():
         except Exception:
             pass
 
+import logging
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.responses import FileResponse, Response
+
+from .security import SecurityHeadersMiddleware, verify_token
+
+logger = logging.getLogger(__name__)
 
 # Import all API routers
 from .knowledge import router as knowledge_router
@@ -59,22 +65,48 @@ _static_dir = _work_path / ".cache" / "web_static"
 _ui_available = _serve_ui and _static_dir.is_dir() and (_static_dir / "index.html").exists()
 
 # Create FastAPI application
+_debug = os.getenv("SIRCHMUNK_DEBUG", "false").lower() == "true"
+
 app = FastAPI(
     title="Sirchmunk API",
     description="APIs for Sirchmunk",
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
+    docs_url="/docs" if _debug else None,
+    redoc_url="/redoc" if _debug else None,
 )
 
 # Configure CORS
+_allowed_origins_raw = os.getenv("SIRCHMUNK_ALLOWED_ORIGINS", "")
+_allowed_origins = [o.strip() for o in _allowed_origins_raw.split(",") if o.strip()]
+if not _allowed_origins:
+    _allowed_origins = ["*"]  # backward-compatible when unconfigured
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify actual origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """Enforce Bearer-token auth on /api/ routes when SIRCHMUNK_API_TOKEN is set."""
+    path = request.url.path
+    # Exempt: health check, favicon, static assets, OPTIONS preflight, UI settings
+    exempt = (
+        path in ("/health", "/favicon.ico")
+        or path.startswith("/_next/")
+        or path == "/api/v1/settings/ui"
+        or request.method == "OPTIONS"
+    )
+    if not exempt and path.startswith("/api/"):
+        await verify_token(request)
+    response = await call_next(request)
+    return response
 
 
 @app.on_event("startup")
@@ -194,7 +226,7 @@ if _ui_available:
         return response
 
     app.mount("/", StaticFiles(directory=str(_static_dir), html=True), name="ui")
-    print(f"[INFO] WebUI enabled, serving static files from {_static_dir}")
+    logger.info("WebUI enabled, serving static files from %s", _static_dir)
 
 if __name__ == "__main__":
     import uvicorn
