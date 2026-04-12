@@ -45,6 +45,7 @@ export default function FileBrowser({ mode, onSelect, onCancel, t }: FileBrowser
   const [pathInput, setPathInput] = useState("/");
   const [showHidden, setShowHidden] = useState(false);
   const [selectedItem, setSelectedItem] = useState<string | null>(null);
+  const [defaultPathLoaded, setDefaultPathLoaded] = useState(false);
 
   const browse = useCallback(async (path: string) => {
     setLoading(true);
@@ -75,8 +76,31 @@ export default function FileBrowser({ mode, onSelect, onCancel, t }: FileBrowser
     browse(currentPath);
   }, [showHidden]);
 
+  // Fetch default browse path on mount
   useEffect(() => {
-    browse("/");
+    const fetchBrowseDefaults = async () => {
+      try {
+        const res = await fetch(apiUrl("/api/v1/file-browser/defaults"), {
+          headers: { ...getAuthHeaders() },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.default_path) {
+            setCurrentPath(data.default_path);
+            setPathInput(data.default_path);
+            browse(data.default_path);
+            setDefaultPathLoaded(true);
+            return;
+          }
+        }
+      } catch (e) {
+        // Silently fall back to current default
+      }
+      // Fallback: browse "/" if no default was fetched
+      browse("/");
+      setDefaultPathLoaded(true);
+    };
+    fetchBrowseDefaults();
   }, []);
 
   const handleItemClick = (item: FileItem) => {

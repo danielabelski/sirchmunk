@@ -67,15 +67,19 @@ def verify_ws_token(websocket: WebSocket) -> bool:
 
 
 def get_allowed_paths() -> List[Path]:
-    """Return resolved allowed paths from env + uploads directory."""
+    """Return resolved allowed paths from env + default work directories."""
     raw = os.getenv("SIRCHMUNK_ALLOWED_PATHS", "")
     work_path = os.getenv("SIRCHMUNK_WORK_PATH", os.path.expanduser("~/.sirchmunk"))
     work_path_resolved = Path(work_path).resolve()
+
     paths = [Path(p.strip()).resolve() for p in raw.split(",") if p.strip()]
-    # Always allow the uploads directory
-    uploads_path = work_path_resolved / "uploads"
-    if uploads_path not in paths:
-        paths.append(uploads_path)
+
+    # Always allow the data and uploads directories under work_path
+    for default_dir in ("data", "uploads"):
+        dp = work_path_resolved / default_dir
+        if dp not in paths:
+            paths.append(dp)
+
     return paths
 
 

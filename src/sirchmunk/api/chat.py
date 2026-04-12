@@ -1369,8 +1369,20 @@ async def get_file_picker_status(request: Request):
     }
 
 
+@router.get("/file-browser/defaults")
+async def file_browser_defaults():
+    """Return the default browse path and configuration status."""
+    work_path = os.getenv("SIRCHMUNK_WORK_PATH", os.path.expanduser("~/.sirchmunk"))
+    default_path = os.path.join(work_path, "data")
+    env_raw = os.getenv("SIRCHMUNK_ALLOWED_PATHS", "").strip()
+    return {
+        "default_path": default_path,
+        "allowed_paths_configured": bool(env_raw),
+    }
+
+
 @router.get("/file-browser")
-async def browse_files(request: Request, path: str = "/", show_hidden: bool = False):
+async def browse_files(request: Request, path: str = "", show_hidden: bool = False):
     """List files and directories at the given path (headless-safe alternative to Tkinter)"""
     client_ip = request.client.host if request.client else "unknown"
 
@@ -1379,19 +1391,24 @@ async def browse_files(request: Request, path: str = "/", show_hidden: bool = Fa
         return {"success": False, "error": "Too many requests, please try again later"}
 
     try:
+        # Default path: work_path/data
+        if not path or not path.strip():
+            work_path = os.getenv("SIRCHMUNK_WORK_PATH", os.path.expanduser("~/.sirchmunk"))
+            path = os.path.join(work_path, "data")
+
         # P0.1: Remote mode requires SIRCHMUNK_ALLOWED_PATHS
         is_remote = client_ip not in ("127.0.0.1", "::1", "localhost")
         if is_remote:
             env_raw = os.getenv("SIRCHMUNK_ALLOWED_PATHS", "").strip()
             if not env_raw:
                 audit_logger.log(client_ip=client_ip, action="browse", path=path, result="denied_no_config")
-                return {"success": False, "error": "File browser is not available. Please contact the administrator."}
+                return {"success": False, "error": "Permission denied: path access is restricted in remote mode"}
 
         abs_path = os.path.abspath(path)
         if not is_path_allowed(abs_path):
             logger.warning("File browser access denied: %s from %s", abs_path, client_ip)
             audit_logger.log(client_ip=client_ip, action="browse", path=path, result="denied")
-            return {"success": False, "error": "Access denied"}
+            return {"success": False, "error": "Permission denied: path is not in the allowed list"}
         if not os.path.exists(abs_path):
             return {"success": False, "error": "The specified path is not accessible"}
         if not os.path.isdir(abs_path):
@@ -1427,7 +1444,7 @@ async def browse_files(request: Request, path: str = "/", show_hidden: bool = Fa
     except PermissionError:
         logger.warning("Permission denied for path %s from %s", abs_path, client_ip)
         audit_logger.log(client_ip=client_ip, action="browse", path=path, result="permission_denied")
-        return {"success": False, "error": "Access denied"}
+        return {"success": False, "error": "Permission denied: path is not in the allowed list"}
     except Exception as e:
         logger.exception("Unexpected error in file browser")
         audit_logger.log(client_ip=client_ip, action="browse", path=path, result="error")

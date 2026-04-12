@@ -367,6 +367,44 @@ export default function HomePage() {
     return !dangerous.some((p) => p.test(trimmed));
   };
 
+  const handleManualPathAdd = async () => {
+    const path = manualPath.trim();
+    if (!path) return;
+
+    // Frontend validation first
+    if (!isValidServerPath(path)) {
+      setPathError("Invalid path (must be absolute, no .., ~, or shell characters)");
+      return;
+    }
+
+    setPathError(null);
+
+    // Backend validation against allowed paths
+    try {
+      const res = await fetch(apiUrl(`/api/v1/file-browser?path=${encodeURIComponent(path)}`), {
+        headers: { ...getAuthHeaders() },
+      });
+      const data = await res.json();
+
+      if (!data.success) {
+        setPathError(data.error || "Permission denied: path is not accessible");
+        return;
+      }
+
+      // Path validated — add it
+      if (!selectedPaths.includes(path)) {
+        setSelectedPaths(prev => [...prev, path]);
+      }
+      setSelectedPath(path);
+      setChatState(prev => ({ ...prev, enableRag: true, selectedKb: path }));
+      setManualPath("");
+      setPathError(null);
+      setShowFileSelector(false);
+    } catch (e) {
+      setPathError("Failed to validate path. Please try again.");
+    }
+  };
+
   const quickActions = [
     {
       icon: Calculator,
@@ -613,19 +651,8 @@ export default function HomePage() {
                     className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && manualPath.trim()) {
-                        if (!isValidServerPath(manualPath)) {
-                          setPathError("Invalid path (must be absolute, no .., ~, or shell characters)");
-                          return;
-                        }
-                        const path = manualPath.trim();
-                        if (!selectedPaths.includes(path)) {
-                          setSelectedPaths(prev => [...prev, path]);
-                        }
-                        setSelectedPath(path);
-                        setChatState(prev => ({ ...prev, enableRag: true, selectedKb: path }));
-                        setManualPath("");
-                        setPathError(null);
-                        setShowFileSelector(false);
+                        e.preventDefault();
+                        handleManualPathAdd();
                       }
                     }}
                   />
@@ -634,23 +661,7 @@ export default function HomePage() {
                   )}
                 </div>
                 <button
-                  onClick={() => {
-                    const path = manualPath.trim();
-                    if (path) {
-                      if (!isValidServerPath(manualPath)) {
-                        setPathError("Invalid path (must be absolute, no .., ~, or shell characters)");
-                        return;
-                      }
-                      if (!selectedPaths.includes(path)) {
-                        setSelectedPaths(prev => [...prev, path]);
-                      }
-                      setSelectedPath(path);
-                      setChatState(prev => ({ ...prev, enableRag: true, selectedKb: path }));
-                      setManualPath("");
-                      setPathError(null);
-                      setShowFileSelector(false);
-                    }
-                  }}
+                  onClick={handleManualPathAdd}
                   disabled={!manualPath.trim() || !!pathError}
                   className={`px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium ${(!manualPath.trim() || pathError) ? "opacity-50 cursor-not-allowed" : ""}`}
                 >

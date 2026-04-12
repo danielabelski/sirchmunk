@@ -97,7 +97,6 @@ export default function FileUpload({
   const [error, setError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const folderInputRef = useRef<HTMLInputElement>(null);
 
   const addFilesDeduped = useCallback(
     (newFiles: FileWithPath[]) => {
@@ -165,17 +164,6 @@ export default function FileUpload({
     }
   };
 
-  const handleFolderSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      const filesWithPaths = Array.from(e.target.files).map((f) => ({
-        file: f,
-        relativePath: (f as any).webkitRelativePath || f.name,
-      }));
-      addFilesDeduped(filesWithPaths);
-      setResult(null);
-      setError(null);
-    }
-  };
 
   const removeFile = (index: number) => {
     setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
@@ -286,52 +274,33 @@ export default function FileUpload({
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
-            className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+            onClick={() => fileInputRef.current?.click()}
+            className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
               isDragOver
                 ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20"
-                : "border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500"
+                : "border-gray-300 dark:border-gray-600 hover:border-blue-400 hover:bg-gray-700/50"
             }`}
           >
             <svg className="mx-auto h-10 w-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
             </svg>
             <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
-              Drag and drop files or folders here, or
+              Drag and drop files or folders here
             </p>
-            <div className="mt-3 flex items-center justify-center gap-3">
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="px-3 py-1.5 text-sm rounded-md font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors"
-              >
-                Select Files
-              </button>
-              <button
-                type="button"
-                onClick={() => folderInputRef.current?.click()}
-                className="px-3 py-1.5 text-sm rounded-md font-medium bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-              >
-                Select Folder
-              </button>
-            </div>
-            <p className="mt-2 text-xs text-gray-500">
-              PDF, DOCX, XLSX, TXT, MD, CSV, JSON, HTML, XML, PPTX
+            <p className="text-gray-400 text-xs mt-2">
+              Click to select files · Drag & drop files or folders
+            </p>
+            <p className="text-gray-500 text-xs mt-1">
+              Max 1 GB per file · 10 GB total
             </p>
             <input
               ref={fileInputRef}
               type="file"
               multiple
               onChange={handleFileSelect}
+              onClick={(e) => e.stopPropagation()}
               style={{ display: 'none' }}
               accept=".pdf,.docx,.doc,.xlsx,.xls,.pptx,.txt,.md,.csv,.json,.html,.xml,.rtf,.epub,.yaml,.yml,.log,.tsv"
-            />
-            <input
-              ref={folderInputRef}
-              type="file"
-              multiple
-              {...({ webkitdirectory: "", directory: "" } as any)}
-              onChange={handleFolderSelect}
-              style={{ display: 'none' }}
             />
           </div>
 
