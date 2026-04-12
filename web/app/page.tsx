@@ -527,7 +527,23 @@ export default function HomePage() {
             </div>
             ) : (
             <div className="space-y-3">
-              {/* Remote mode: Upload & Collection management */}
+              {/* Server section */}
+              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t("Server")}</p>
+              <button
+                onClick={() => { setFileBrowserMode("directory"); setShowFileSelector(false); }}
+                className="w-full flex items-center gap-3 p-4 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+              >
+                <svg className="w-6 h-6 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                </svg>
+                <div className="text-left">
+                  <div className="font-medium text-gray-900 dark:text-gray-100">{t("Browse Server Folders")}</div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">{t("Select folders from the server filesystem")}</div>
+                </div>
+              </button>
+
+              {/* Upload section */}
+              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mt-2">{t("Upload")}</p>
               <button
                 onClick={() => { setShowUpload(true); setShowFileSelector(false); }}
                 className="w-full flex items-center gap-3 p-4 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
@@ -554,6 +570,8 @@ export default function HomePage() {
                 </div>
               </button>
 
+              {/* Manual section */}
+              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mt-2">{t("Manual")}</p>
               <div className="flex items-center gap-2 p-4 rounded-lg border border-gray-200 dark:border-gray-600">
                 <svg className="w-6 h-6 text-purple-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />

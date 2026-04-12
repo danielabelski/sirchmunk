@@ -8,7 +8,7 @@ import platform
 import re
 import time
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Request
 from typing import Dict, Any, List, Optional, Union, Tuple
 from pydantic import BaseModel
 import json
@@ -1318,19 +1318,22 @@ async def open_file_picker(request: Dict[str, Any]):
         }
 
 @router.get("/file-picker/status")
-async def get_file_picker_status():
+async def get_file_picker_status(request: Request):
     """Check if file picker is available on this system"""
     avail = _ensure_tkinter()
+    client_host = request.client.host if request.client else ""
+    is_local_client = client_host in ("127.0.0.1", "::1", "localhost")
+    effective_tkinter = avail and is_local_client
     return {
         "success": True,
         "data": {
-            "tkinter_available": avail,
-            "deployment_mode": "local" if avail else "remote",
+            "tkinter_available": effective_tkinter,
+            "deployment_mode": "local" if effective_tkinter else "remote",
             "upload_enabled": True,
             "server_browser": True,
             "supported_types": ["files", "directory"],
             "features": {
-                "multiple_files": avail,
+                "multiple_files": effective_tkinter,
                 "directory_selection": True,
                 "absolute_paths": True
             }
