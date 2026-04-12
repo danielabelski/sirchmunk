@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -19,6 +20,8 @@ from typing import List, Optional, Tuple
 from pydantic import BaseModel
 
 from .security import sanitize_filename
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +193,7 @@ class FileStorageService:
         filename: str,
         content: bytes,
         relative_path: Optional[str] = None,
+        overwrite: bool = False,
     ) -> FileMetadata:
         """Save an uploaded file into *collection*, returning its metadata."""
         self.validate_collection_name(collection)
@@ -215,8 +219,21 @@ class FileStorageService:
         target_dir = col_dir / sub_dir
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        # Deduplicate filename: if exists, append _1, _2, etc.
+        # Handle overwrite: remove old file and manifest entry first
         target = target_dir / filename
+        if overwrite and target.exists():
+            try:
+                target.unlink()
+                logger.info("Overwriting existing file: %s", target)
+            except OSError:
+                pass
+            # Remove old manifest entry with matching name
+            manifest_name = relative_path if relative_path else filename
+            manifest = self._read_manifest(collection)
+            manifest = [e for e in manifest if e.get("name") != manifest_name]
+            self._write_manifest(collection, manifest)
+
+        # Deduplicate filename: if exists, append _1, _2, etc.
         stem = Path(filename).stem
         ext = Path(filename).suffix
         counter = 1
@@ -325,6 +342,40 @@ class FileStorageService:
         count = len(entries)
         shutil.rmtree(col_dir)
         return count
+
+    def check_duplicates(self, collection: str, file_entries: List[dict]) -> dict:
+        """Check which files already exist in the collection manifest.
+
+        Args:
+            collection: Collection name
+            file_entries: List of dicts with 'name' (relative path) and 'size' (bytes)
+
+        Returns:
+            dict with 'duplicates' and 'new_files' lists
+        """
+        collection = Path(collection).name  # sanitize
+        manifest = self._read_manifest(collection)
+
+        # Build lookup by name
+        existing = {entry["name"]: entry for entry in manifest}
+
+        duplicates = []
+        new_files = []
+
+        for fe in file_entries:
+            name = fe.get("name", "")
+            if name in existing:
+                entry = existing[name]
+                duplicates.append({
+                    "name": name,
+                    "existing_file_id": entry.get("file_id", ""),
+                    "existing_size": entry.get("size_bytes", 0),
+                    "existing_upload_time": entry.get("upload_time", ""),
+                })
+            else:
+                new_files.append(name)
+
+        return {"duplicates": duplicates, "new_files": new_files}
 
     def get_disk_usage(self) -> DiskUsageInfo:
         """Return current disk usage statistics."""

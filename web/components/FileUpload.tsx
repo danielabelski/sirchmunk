@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useCallback, useEffect } from "react";
+import React, { useState, useRef, useCallback } from "react";
 
 // File System Access API types for drag-and-drop folder support
 interface FileSystemEntry {
@@ -96,10 +96,11 @@ export default function FileUpload({
   const [result, setResult] = useState<UploadResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
-  const [showPickerMenu, setShowPickerMenu] = useState(false);
+  const [dupCheckLoading, setDupCheckLoading] = useState(false);
+  const [duplicateFiles, setDuplicateFiles] = useState<string[]>([]);
+  const [showDupDialog, setShowDupDialog] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
-  const dropZoneRef = useRef<HTMLDivElement>(null);
 
   const addFilesDeduped = useCallback(
     (newFiles: FileWithPath[]) => {
@@ -165,7 +166,6 @@ export default function FileUpload({
       setResult(null);
       setError(null);
     }
-    setShowPickerMenu(false);
   };
 
   const handleFolderSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -183,20 +183,7 @@ export default function FileUpload({
     setResult(null);
     setError(null);
     e.target.value = "";
-    setShowPickerMenu(false);
   };
-
-  // Close picker menu when clicking outside the drop zone
-  useEffect(() => {
-    if (!showPickerMenu) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropZoneRef.current && !dropZoneRef.current.contains(e.target as Node)) {
-        setShowPickerMenu(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [showPickerMenu]);
 
 
   const removeFile = (index: number) => {
@@ -211,8 +198,59 @@ export default function FileUpload({
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   };
 
-  const handleUpload = async () => {
-    if (selectedFiles.length === 0) return;
+  const checkDuplicates = async (): Promise<{duplicates: any[], new_files: string[]} | null> => {
+    const fileEntries = selectedFiles.map(f => ({
+      name: f.relativePath,
+      size: f.file.size,
+    }));
+
+    try {
+      const res = await fetch(apiUrl("/api/v1/files/check-duplicates"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({
+          collection: collection,
+          files: fileEntries,
+        }),
+      });
+
+      if (res.ok) {
+        return await res.json();
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const handleUploadClick = async () => {
+    setDupCheckLoading(true);
+    const result = await checkDuplicates();
+    setDupCheckLoading(false);
+
+    if (!result || result.duplicates.length === 0) {
+      // No duplicates — proceed with upload
+      handleUpload(false);
+      return;
+    }
+
+    // Duplicates found — show confirmation dialog
+    setDuplicateFiles(result.duplicates.map((d: any) => d.name));
+    setShowDupDialog(true);
+  };
+
+  const handleUpload = async (overwrite: boolean, skipFiles?: string[]) => {
+    const filesToUpload = skipFiles
+      ? selectedFiles.filter(f => !skipFiles.includes(f.relativePath))
+      : selectedFiles;
+
+    if (filesToUpload.length === 0) {
+      setError("No new files to upload");
+      return;
+    }
 
     setUploading(true);
     setProgress(0);
@@ -221,7 +259,10 @@ export default function FileUpload({
 
     const formData = new FormData();
     formData.append("collection", collection);
-    selectedFiles.forEach(({ file, relativePath }) => {
+    if (overwrite) {
+      formData.append("overwrite", "true");
+    }
+    filesToUpload.forEach(({ file, relativePath }) => {
       formData.append("files", file);
       formData.append("paths", relativePath);
     });
@@ -305,42 +346,58 @@ export default function FileUpload({
 
           {/* Drop Zone */}
           <div
-            ref={dropZoneRef}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
-            onDragEnter={(e) => {
-              e.preventDefault();
-              setShowPickerMenu(false);
-            }}
+            onDragEnter={(e) => e.preventDefault()}
             onDrop={handleDrop}
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowPickerMenu(!showPickerMenu);
-            }}
-            className={`relative border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
+            className={`border-2 border-dashed rounded-lg py-8 px-4 text-center transition-colors flex flex-col items-center justify-center ${
               isDragOver
-                ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20"
-                : "border-gray-300 dark:border-gray-600 hover:border-blue-400 hover:bg-gray-700/50"
+                ? "border-blue-400 bg-gray-700/50"
+                : "border-gray-600"
             }`}
           >
             <svg className="mx-auto h-10 w-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
             </svg>
-            <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
-              Drag and drop files or folders here
-            </p>
-            <p className="text-gray-400 text-xs mt-2">
-              Click to select · Drag & drop files or folders
+            <p className="text-gray-300 text-sm mt-2">
+              Drag &amp; drop files or folders here
             </p>
             <p className="text-gray-500 text-xs mt-1">
               Max 1 GB per file · 10 GB total
             </p>
+            <div className="flex gap-3 mt-3">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  fileInputRef.current?.click();
+                }}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-lg transition-colors flex items-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                </svg>
+                Select Files
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  folderInputRef.current?.click();
+                }}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded-lg transition-colors flex items-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                </svg>
+                Select Folder
+              </button>
+            </div>
             <input
               ref={fileInputRef}
               type="file"
               multiple
               onChange={handleFileSelect}
-              onClick={(e) => e.stopPropagation()}
               style={{ display: 'none' }}
               accept=".pdf,.docx,.doc,.xlsx,.xls,.pptx,.txt,.md,.csv,.json,.html,.xml,.rtf,.epub,.yaml,.yml,.log,.tsv"
             />
@@ -353,39 +410,7 @@ export default function FileUpload({
               directory=""
               multiple
               onChange={handleFolderSelect}
-              onClick={(e) => e.stopPropagation()}
             />
-            {showPickerMenu && (
-              <div
-                className="absolute z-10 mt-2 bg-gray-700 border border-gray-600 rounded-lg shadow-lg overflow-hidden"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <button
-                  className="w-full px-4 py-2 text-left text-sm text-gray-200 hover:bg-gray-600 transition-colors flex items-center gap-2"
-                  onClick={() => {
-                    fileInputRef.current?.click();
-                    setShowPickerMenu(false);
-                  }}
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                  </svg>
-                  Select Files
-                </button>
-                <button
-                  className="w-full px-4 py-2 text-left text-sm text-gray-200 hover:bg-gray-600 transition-colors flex items-center gap-2"
-                  onClick={() => {
-                    folderInputRef.current?.click();
-                    setShowPickerMenu(false);
-                  }}
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                  </svg>
-                  Select Folder
-                </button>
-              </div>
-            )}
           </div>
 
           {/* Selected Files List */}
@@ -469,14 +494,65 @@ export default function FileUpload({
             Close
           </button>
           <button
-            onClick={handleUpload}
-            disabled={uploading || selectedFiles.length === 0}
+            onClick={handleUploadClick}
+            disabled={uploading || dupCheckLoading || selectedFiles.length === 0}
             className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {uploading ? "Uploading..." : `Upload ${selectedFiles.length > 0 ? `(${selectedFiles.length})` : ""}`}
+            {dupCheckLoading ? "Checking..." : uploading ? "Uploading..." : `Upload ${selectedFiles.length > 0 ? `(${selectedFiles.length})` : ""}`}
           </button>
         </div>
       </div>
+
+      {showDupDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 border border-gray-600 rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+            <h3 className="text-white text-lg font-semibold mb-3">
+              Duplicate Files Found
+            </h3>
+            <p className="text-gray-300 text-sm mb-3">
+              {duplicateFiles.length} file{duplicateFiles.length > 1 ? "s" : ""} already exist{duplicateFiles.length === 1 ? "s" : ""} in collection &ldquo;{collection}&rdquo;:
+            </p>
+            <div className="max-h-40 overflow-y-auto bg-gray-900 rounded p-2 mb-4">
+              {duplicateFiles.map((name, i) => (
+                <p key={i} className="text-gray-400 text-xs py-0.5 truncate" title={name}>
+                  {name}
+                </p>
+              ))}
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => {
+                  setShowDupDialog(false);
+                  setDuplicateFiles([]);
+                }}
+                className="px-3 py-1.5 text-sm text-gray-300 hover:text-white bg-gray-700 hover:bg-gray-600 rounded transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setShowDupDialog(false);
+                  handleUpload(false, duplicateFiles);
+                  setDuplicateFiles([]);
+                }}
+                className="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-500 rounded transition-colors"
+              >
+                Skip Duplicates
+              </button>
+              <button
+                onClick={() => {
+                  setShowDupDialog(false);
+                  handleUpload(true);
+                  setDuplicateFiles([]);
+                }}
+                className="px-3 py-1.5 text-sm text-white bg-orange-600 hover:bg-orange-500 rounded transition-colors"
+              >
+                Overwrite All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

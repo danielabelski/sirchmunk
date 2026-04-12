@@ -7,6 +7,7 @@ import os
 from typing import List, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from .file_service import (
     CollectionInfo,
@@ -40,11 +41,32 @@ def _check_enabled() -> None:
         )
 
 
+class FileEntry(BaseModel):
+    name: str
+    size: int
+
+
+class CheckDuplicatesRequest(BaseModel):
+    collection: str
+    files: List[FileEntry]
+
+
+@router.post("/check-duplicates")
+async def check_duplicates(request: CheckDuplicatesRequest):
+    """Check which files already exist in the collection."""
+    _check_enabled()
+    svc = _get_service()
+    file_entries = [{"name": f.name, "size": f.size} for f in request.files]
+    result = svc.check_duplicates(request.collection, file_entries)
+    return result
+
+
 @router.post("/upload")
 async def upload_files(
     files: List[UploadFile] = File(..., description="One or more files to upload"),
     collection: str = Form(default="default", description="Collection name (alphanumeric, dashes, underscores)"),
     paths: List[str] = Form(default=[], description="Relative paths preserving directory structure"),
+    overwrite: bool = Form(default=False, description="Overwrite existing files instead of renaming"),
 ):
     """Batch upload files to a named collection."""
     _check_enabled()
@@ -67,6 +89,7 @@ async def upload_files(
                 upload_file.filename or "unnamed",
                 content,
                 relative_path=relative_path,
+                overwrite=overwrite,
             )
             results.append(meta.model_dump())
         except ValueError as e:
