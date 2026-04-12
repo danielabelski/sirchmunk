@@ -38,9 +38,10 @@ if _env_file.exists():
         except Exception:
             pass
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.responses import FileResponse, Response
 
 # Import all API routers
 from .knowledge import router as knowledge_router
@@ -157,6 +158,29 @@ async def internal_error_handler(request, exc):
 # take priority over the catch-all static file serving.
 if _ui_available:
     from fastapi.staticfiles import StaticFiles
+
+    # SPA route fallback — Next.js static export creates route directories
+    # (e.g. history/) for RSC payloads but no index.html inside them.
+    # Starlette's StaticFiles(html=True) resolves the directory first and
+    # returns 404 when index.html is missing. This middleware intercepts
+    # those 404s for known frontend routes and serves the correct .html file.
+    _SPA_ROUTES = {"history", "knowledge", "monitor", "settings"}
+
+    @app.middleware("http")
+    async def spa_fallback(request: Request, call_next):
+        response = await call_next(request)
+        if response.status_code == 404:
+            path = request.url.path.strip("/").split("/")[0]
+            if path in _SPA_ROUTES:
+                html_file = _static_dir / f"{path}.html"
+                if html_file.is_file():
+                    if request.method == "HEAD":
+                        return Response(
+                            status_code=200,
+                            headers={"content-type": "text/html; charset=utf-8"},
+                        )
+                    return FileResponse(html_file, media_type="text/html")
+        return response
 
     app.mount("/", StaticFiles(directory=str(_static_dir), html=True), name="ui")
     print(f"[INFO] WebUI enabled, serving static files from {_static_dir}")
