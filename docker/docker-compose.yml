@@ -24,11 +24,13 @@ services:
     volumes:
       # SIRCHMUNK_WORK_PATH is set to /data/sirchmunk inside the image.
       # Mount a host directory for persistence across restarts.
-      - /path/to/sirchmunk_workspace:/data/sirchmunk
+      # - /path/to/sirchmunk_workspace:/data/sirchmunk        # Persistent work data (includes uploads/)
       # Mount local search paths (add your own paths here)
       # - /path/to/your/docs:/mnt/docs:ro
     environment:
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_MODEL_NAME=${LLM_MODEL_NAME:-gpt-5.2}
+      - SIRCHMUNK_UPLOAD_ENABLED=true
+      - SIRCHMUNK_UPLOAD_MAX_FILE_SIZE=1024
     restart: unless-stopped

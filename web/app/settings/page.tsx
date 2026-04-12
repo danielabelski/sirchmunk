@@ -14,7 +14,7 @@ import {
   Eye,
   EyeOff,
 } from "lucide-react";
-import { apiUrl } from "@/lib/api";
+import { apiUrl, getAuthHeaders } from "@/lib/api";
 import { getTranslation, type Language } from "@/lib/i18n";
 import { setTheme } from "@/lib/theme";
 import { useGlobal } from "@/context/GlobalContext";
@@ -67,7 +67,7 @@ export default function SettingsPage() {
       setLoading(true);
       setError("");
       
-      const response = await fetch(apiUrl("/api/v1/settings"));
+      const response = await fetch(apiUrl("/api/v1/settings"), { headers: { ...getAuthHeaders() } });
       if (!response.ok) throw new Error("Failed to fetch settings");
       
       const result = await response.json();
@@ -111,7 +111,7 @@ export default function SettingsPage() {
 
       const response = await fetch(apiUrl("/api/v1/settings"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify(payload),
       });
 

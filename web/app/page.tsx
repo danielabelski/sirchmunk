@@ -33,10 +33,12 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { useGlobal } from "@/context/GlobalContext";
-import { apiUrl } from "@/lib/api";
+import { apiUrl, getAuthHeaders } from "@/lib/api";
 import { processLatexContent } from "@/lib/latex";
 import { getTranslation, type Language } from "@/lib/i18n";
 import FileBrowser from "@/components/FileBrowser";
+import FileUpload from "@/components/FileUpload";
+import CollectionBrowser from "../components/CollectionBrowser";
 
 interface KnowledgeBase {
   name: string;
@@ -89,6 +91,10 @@ export default function HomePage() {
   const [showPathDropdown, setShowPathDropdown] = useState(false);
   const [showModeDropdown, setShowModeDropdown] = useState(false);
   const [enableSuggestions, setEnableSuggestions] = useState(true);
+  const [showUpload, setShowUpload] = useState(false);
+  const [showCollectionBrowser, setShowCollectionBrowser] = useState(false);
+  const [manualPath, setManualPath] = useState("");
+  const [pathError, setPathError] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -99,7 +105,7 @@ export default function HomePage() {
 
   // Fetch knowledge bases
   useEffect(() => {
-    fetch(apiUrl("/api/v1/knowledge/list"))
+    fetch(apiUrl("/api/v1/knowledge/list"), { headers: { ...getAuthHeaders() } })
       .then((res) => res.json())
       .then((response) => {
         // Handle API response structure
@@ -121,7 +127,7 @@ export default function HomePage() {
 
   // Sync file selector with SIRCHMUNK_SEARCH_PATHS from .env
   useEffect(() => {
-    fetch(apiUrl("/api/v1/settings/environment"))
+    fetch(apiUrl("/api/v1/settings/environment"), { headers: { ...getAuthHeaders() } })
       .then((res) => res.json())
       .then((result) => {
         if (result.success && result.data?.SIRCHMUNK_SEARCH_PATHS) {
@@ -149,7 +155,7 @@ export default function HomePage() {
 
   // Check if Tkinter file picker is available (will be false in Docker)
   useEffect(() => {
-    fetch(apiUrl("/api/v1/file-picker/status"))
+    fetch(apiUrl("/api/v1/file-picker/status"), { headers: { ...getAuthHeaders() } })
       .then((res) => res.json())
       .then((result) => {
         if (result.success) {
@@ -220,7 +226,8 @@ export default function HomePage() {
 
     try {
       const response = await fetch(
-        apiUrl(`/api/v1/search/suggestions?kb_name=${encodeURIComponent(chatState.selectedKb)}&query=${encodeURIComponent(query)}&limit=8`)
+        apiUrl(`/api/v1/search/suggestions?kb_name=${encodeURIComponent(chatState.selectedKb)}&query=${encodeURIComponent(query)}&limit=8`),
+        { headers: { ...getAuthHeaders() } }
       );
       if (!response.ok) {
         setSearchSuggestions([]);
@@ -344,6 +351,60 @@ export default function HomePage() {
     );
   };
 
+  const isValidServerPath = (path: string): boolean => {
+    if (!path || path.trim().length === 0) return false;
+    const trimmed = path.trim();
+    // Must be absolute path
+    if (!trimmed.startsWith("/")) return false;
+    // Reject dangerous patterns
+    const dangerous = [
+      /\.\./, // relative traversal
+      /^~/, // home directory
+      /[;&|`$(){}]/, // shell special chars
+      /\0/, // null byte
+      /[\r\n]/, // line endings
+    ];
+    return !dangerous.some((p) => p.test(trimmed));
+  };
+
+  const handleManualPathAdd = async () => {
+    const path = manualPath.trim();
+    if (!path) return;
+
+    // Frontend validation first
+    if (!isValidServerPath(path)) {
+      setPathError("Invalid path (must be absolute, no .., ~, or shell characters)");
+      return;
+    }
+
+    setPathError(null);
+
+    // Backend validation against allowed paths
+    try {
+      const res = await fetch(apiUrl(`/api/v1/file-browser?path=${encodeURIComponent(path)}`), {
+        headers: { ...getAuthHeaders() },
+      });
+      const data = await res.json();
+
+      if (!data.success) {
+        setPathError(data.error || "Permission denied: path is not accessible");
+        return;
+      }
+
+      // Path validated — add it
+      if (!selectedPaths.includes(path)) {
+        setSelectedPaths(prev => [...prev, path]);
+      }
+      setSelectedPath(path);
+      setChatState(prev => ({ ...prev, enableRag: true, selectedKb: path }));
+      setManualPath("");
+      setPathError(null);
+      setShowFileSelector(false);
+    } catch (e) {
+      setPathError("Failed to validate path. Please try again.");
+    }
+  };
+
   const quickActions = [
     {
       icon: Calculator,
@@ -402,20 +463,18 @@ export default function HomePage() {
               {t("Select File or Folder")}
             </h3>
 
+            {tkinterAvailable ? (
             <div className="space-y-3">
               {/* Single File Button */}
               <button
                 type="button"
                 onClick={async () => {
-                  if (!tkinterAvailable) {
-                    setFileBrowserMode("files");
-                    return;
-                  }
                   try {
                     const response = await fetch(apiUrl("/api/v1/file-picker"), {
                       method: "POST",
                       headers: {
                         "Content-Type": "application/json",
+                        ...getAuthHeaders(),
                       },
                       body: JSON.stringify({
                         type: "files",
@@ -455,15 +514,12 @@ export default function HomePage() {
               <button
                 type="button"
                 onClick={async () => {
-                  if (!tkinterAvailable) {
-                    setFileBrowserMode("directory");
-                    return;
-                  }
                   try {
                     const response = await fetch(apiUrl("/api/v1/file-picker"), {
                       method: "POST",
                       headers: {
                         "Content-Type": "application/json",
+                        ...getAuthHeaders(),
                       },
                       body: JSON.stringify({
                         type: "directory",
@@ -527,6 +583,93 @@ export default function HomePage() {
                 />
               </div>
             </div>
+            ) : (
+            <div className="space-y-3">
+              {/* Server section */}
+              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t("Server")}</p>
+              <button
+                onClick={() => { setFileBrowserMode("directory"); setShowFileSelector(false); }}
+                className="w-full flex items-center gap-3 p-4 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+              >
+                <svg className="w-6 h-6 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                </svg>
+                <div className="text-left">
+                  <div className="font-medium text-gray-900 dark:text-gray-100">{t("Browse Server Folders")}</div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">{t("Select folders from the server filesystem")}</div>
+                </div>
+              </button>
+
+              {/* Upload section */}
+              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mt-2">{t("Upload")}</p>
+              <button
+                onClick={() => { setShowUpload(true); setShowFileSelector(false); }}
+                className="w-full flex items-center gap-3 p-4 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+              >
+                <svg className="w-6 h-6 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+                <div className="text-left">
+                  <div className="font-medium text-gray-900 dark:text-gray-100">{t("Upload Files")}</div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">{t("Upload files from your computer to the server")}</div>
+                </div>
+              </button>
+
+              <button
+                onClick={() => { setShowCollectionBrowser(true); setShowFileSelector(false); }}
+                className="w-full flex items-center gap-3 p-4 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+              >
+                <svg className="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
+                <div className="text-left">
+                  <div className="font-medium text-gray-900 dark:text-gray-100">{t("Browse Collections")}</div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">{t("Select from previously uploaded file collections")}</div>
+                </div>
+              </button>
+
+              {/* Manual section */}
+              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mt-2">{t("Manual")}</p>
+              <div className="flex items-center gap-2 p-4 rounded-lg border border-gray-200 dark:border-gray-600">
+                <svg className="w-6 h-6 text-purple-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                </svg>
+                <div className="flex-1">
+                  <input
+                    type="text"
+                    value={manualPath}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setManualPath(val);
+                      if (val.trim() && !isValidServerPath(val)) {
+                        setPathError("Invalid path (must be absolute, no .., ~, or shell characters)");
+                      } else {
+                        setPathError(null);
+                      }
+                    }}
+                    placeholder={t("Enter server path (e.g., /data/docs)")}
+                    className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && manualPath.trim()) {
+                        e.preventDefault();
+                        handleManualPathAdd();
+                      }
+                    }}
+                  />
+                  {pathError && (
+                    <p className="text-red-400 text-xs mt-1">{pathError}</p>
+                  )}
+                </div>
+                <button
+                  onClick={handleManualPathAdd}
+                  disabled={!manualPath.trim() || !!pathError}
+                  className={`px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium ${(!manualPath.trim() || pathError) ? "opacity-50 cursor-not-allowed" : ""}`}
+                >
+                  {t("Add")}
+                </button>
+              </div>
+            </div>
+            )}
 
             <div className="flex gap-3 mt-6">
               <button
@@ -948,13 +1091,24 @@ export default function HomePage() {
               )}
             </div>
 
-            <button
-              onClick={newChatSession}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              {t("New Chat")}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowUpload(true)}
+                className="p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700"
+                title="Upload files"
+              >
+                <svg className="w-5 h-5 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+              </button>
+              <button
+                onClick={newChatSession}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                {t("New Chat")}
+              </button>
+            </div>
           </div>
 
           {/* Messages Area */}
@@ -1246,6 +1400,33 @@ export default function HomePage() {
       )}
       </div>
 
+      <FileUpload
+        isOpen={showUpload}
+        onClose={() => setShowUpload(false)}
+        onUploadComplete={(path) => {
+          if (path && !selectedPaths.includes(path)) {
+            setSelectedPaths(prev => [...prev, path]);
+          }
+          setSelectedPath(path);
+          setChatState(prev => ({ ...prev, enableRag: true, selectedKb: path }));
+          setShowUpload(false);
+          setShowFileSelector(false);
+        }}
+      />
+
+      <CollectionBrowser
+        isOpen={showCollectionBrowser}
+        onClose={() => setShowCollectionBrowser(false)}
+        onSelectPath={(path) => {
+          if (!selectedPaths.includes(path)) {
+            setSelectedPaths(prev => [...prev, path]);
+          }
+          setSelectedPath(path);
+          setChatState(prev => ({ ...prev, enableRag: true, selectedKb: path }));
+          setShowCollectionBrowser(false);
+          setShowFileSelector(false);
+        }}
+      />
     </div>
   );
 }

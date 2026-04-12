@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import sys
+import textwrap
 from pathlib import Path
 from typing import Optional
 
@@ -139,6 +140,12 @@ SIRCHMUNK_VERBOSE=false
 # When set, acts as the default for search(..., paths=...) if none are provided.
 SIRCHMUNK_SEARCH_PATHS=
 
+# Maximum chat history turns for multi-turn context (0 = disabled)
+CHAT_HISTORY_MAX_TURNS=5
+
+# Maximum tokens for chat history context
+CHAT_HISTORY_MAX_TOKENS=32000
+
 # Maximum directory depth to search
 DEFAULT_MAX_DEPTH=5
 
@@ -187,6 +194,38 @@ EMBEDDING_MODEL_ID=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 
 # Embedding model cache directory
 EMBEDDING_CACHE_DIR=${SIRCHMUNK_WORK_PATH}/.cache/models
+
+# ===== File Upload Settings =====
+# Enable file upload endpoint (true/false)
+SIRCHMUNK_UPLOAD_ENABLED=true
+
+# Maximum single file size in MB (default: 1024 MB = 1GB)
+SIRCHMUNK_UPLOAD_MAX_FILE_SIZE=1024
+
+# Maximum total upload storage in MB (default: 10240 MB = 10GB)
+SIRCHMUNK_UPLOAD_MAX_TOTAL=10240
+
+# ===== Security Settings =====
+
+# API authentication token (leave empty to disable auth)
+# When set, all API requests must include "Authorization: Bearer <token>"
+SIRCHMUNK_API_TOKEN=
+
+# Allowed CORS origins, comma-separated (default: * allows all origins)
+# Example: http://localhost:3000,https://myapp.example.com
+SIRCHMUNK_ALLOWED_ORIGINS=
+
+# Allowed file browser paths, comma-separated (default: unrestricted)
+# When set, the /file-browser endpoint can only access these directories and their children
+# Example: /home/user/docs,/data/shared
+SIRCHMUNK_ALLOWED_PATHS=
+
+# Enable API documentation (Swagger UI at /docs, ReDoc at /redoc)
+# Set to "true" for development, "false" (default) for production
+SIRCHMUNK_DEBUG=false
+
+# Maximum concurrent WebSocket connections (default: 100)
+SIRCHMUNK_MAX_WS_CONNECTIONS=100
 """
 
     # Replace default paths with actual work_path
@@ -510,8 +549,13 @@ def cmd_search(args: argparse.Namespace) -> int:
         Exit code (0 for success, non-zero for failure)
     """
     try:
-        # Load environment
-        work_path = _get_default_work_path().expanduser().resolve()
+        # Resolve work path from --work-path or default
+        work_path = Path(
+            getattr(args, "work_path", None) or str(_get_default_work_path())
+        ).expanduser().resolve()
+        os.environ["SIRCHMUNK_WORK_PATH"] = str(work_path)
+
+        # Load environment from work path .env
         env_file = work_path / ".env"
         if env_file.exists():
             _load_env_file(env_file)
@@ -536,6 +580,7 @@ def cmd_search(args: argparse.Namespace) -> int:
                 mode=args.mode,
                 output_format=args.output,
                 verbose=args.verbose,
+                work_path=work_path,
             ))
 
     except KeyboardInterrupt:
@@ -553,6 +598,7 @@ async def _search_local(
     mode: str = "FAST",
     output_format: str = "text",
     verbose: bool = False,
+    work_path: Optional[Path] = None,
 ) -> int:
     """Execute search locally using AgenticSearch.
 
@@ -562,6 +608,7 @@ async def _search_local(
         mode: Search mode (FAST, DEEP, FILENAME_ONLY)
         output_format: Output format (text, json)
         verbose: Enable verbose output
+        work_path: Resolved working directory path
 
     Returns:
         Exit code
@@ -587,8 +634,9 @@ async def _search_local(
         model=llm_model_name,
     )
 
-    # Create search instance
-    work_path = _get_default_work_path()
+    # Create search instance with resolved work path
+    if work_path is None:
+        work_path = _get_default_work_path()
     searcher = AgenticSearch(
         llm=llm,
         work_path=str(work_path),
@@ -1178,6 +1226,112 @@ def cmd_mcp_version(args: argparse.Namespace) -> int:
 
 
 # ------------------------------------------------------------------
+# sirchmunk upload
+# ------------------------------------------------------------------
+
+def cmd_upload(args: argparse.Namespace) -> int:
+    """Upload local files to a remote sirchmunk server."""
+    try:
+        import httpx
+    except ImportError:
+        print("[ERROR] httpx is required for upload. Install with: pip install httpx")
+        return 1
+
+    local_path = Path(args.path).expanduser().resolve()
+    if not local_path.exists():
+        print(f"[ERROR] Path not found: {local_path}")
+        return 1
+
+    remote = args.remote.rstrip("/")
+    collection = args.collection or "default"
+
+    # Collect files
+    include_patterns = []
+    if args.include:
+        include_patterns = [p.strip() for p in args.include.split(",")]
+
+    files_to_upload: list[Path] = []
+    if local_path.is_file():
+        files_to_upload = [local_path]
+    else:
+        for f in sorted(local_path.rglob("*")):
+            if not f.is_file() or f.name.startswith("."):
+                continue
+            if include_patterns:
+                if not any(f.name.endswith(p.lstrip("*")) for p in include_patterns):
+                    continue
+            files_to_upload.append(f)
+
+    if not files_to_upload:
+        print("[WARN] No files found to upload.")
+        return 0
+
+    total_size = sum(f.stat().st_size for f in files_to_upload)
+    print(f"Uploading {len(files_to_upload)} file(s) ({total_size:,} bytes) to {remote}")
+    print(f"Collection: {collection}")
+    print("-" * 50)
+
+    url = f"{remote}/api/v1/files/upload"
+
+    # Upload in batches of 20 to avoid overwhelming the server
+    batch_size = 20
+    total_uploaded = 0
+    total_errors = 0
+
+    with httpx.Client(timeout=300.0) as client:
+        for i in range(0, len(files_to_upload), batch_size):
+            batch = files_to_upload[i:i + batch_size]
+            multipart_files = []
+            try:
+                for f in batch:
+                    multipart_files.append(
+                        ("files", (f.name, open(f, "rb"), "application/octet-stream"))
+                    )
+                resp = client.post(
+                    url,
+                    files=multipart_files,
+                    data={"collection": collection},
+                )
+                result = resp.json()
+
+                if result.get("success"):
+                    data = result.get("data", {})
+                    uploaded = data.get("total_uploaded", 0)
+                    errors = data.get("total_errors", 0)
+                    total_uploaded += uploaded
+                    total_errors += errors
+
+                    for item in data.get("uploaded", []):
+                        print(f"  [OK] {item['name']} ({item['size_bytes']:,} bytes)")
+                    for err in data.get("errors", []):
+                        print(f"  [FAIL] {err['name']}: {err['error']}")
+                else:
+                    print(f"  [ERROR] Server error: {result.get('detail', 'Unknown error')}")
+                    total_errors += len(batch)
+            except Exception as exc:
+                print(f"  [ERROR] Upload failed: {exc}")
+                total_errors += len(batch)
+            finally:
+                # Close file handles
+                for _, (_, fh, _) in multipart_files:
+                    fh.close()
+
+    print("-" * 50)
+    print(f"Done: {total_uploaded} uploaded, {total_errors} errors")
+
+    if total_uploaded > 0:
+        print(f"\nSearch uploaded files with:")
+        print(f"  curl -X POST {remote}/api/v1/search \\")
+        print(f"    -H 'Content-Type: application/json' \\")
+        print(f"    -d '\"query\": \"your question\", \"paths\": [\"{remote}/api/v1/files/collections/{collection}/path\"]'")
+        # Also show the direct path approach
+        print(f"\n  Or first get the collection path:")
+        print(f"  curl {remote}/api/v1/files/collections/{collection}/path")
+
+    return 0 if total_errors == 0 else 1
+
+
+# ------------------------------------------------------------------
 # sirchmunk version
 # ------------------------------------------------------------------
 
@@ -1274,6 +1428,11 @@ Examples:
     search_parser.add_argument("--api", action="store_true", help="Use API server instead of local search")
     search_parser.add_argument("--api-url", default="http://localhost:8584", help="API server URL")
     search_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose output")
+    search_parser.add_argument(
+        "--work-path",
+        default=None,
+        help="Working directory (default: ~/.sirchmunk)",
+    )
     search_parser.set_defaults(func=cmd_search)
 
     # === web command group ===
@@ -1341,6 +1500,40 @@ Examples:
         help="Show MCP version information",
     )
     mcp_version_parser.set_defaults(func=cmd_mcp_version)
+
+    # === upload command ===
+    upload_parser = subparsers.add_parser(
+        "upload",
+        help="Upload local files to a remote sirchmunk server",
+        description="Upload files or directories to a remote sirchmunk server for search.",
+        epilog=textwrap.dedent("""\
+            Example usage:
+              sirchmunk upload ./local_docs/ --remote http://server:8584 --collection my_project
+              sirchmunk upload report.pdf --remote http://server:8584
+              sirchmunk upload ./data/ --remote http://server:8584 --include "*.pdf,*.docx"
+        """),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    upload_parser.add_argument(
+        "path",
+        help="Local file or directory to upload",
+    )
+    upload_parser.add_argument(
+        "--remote",
+        required=True,
+        help="Remote sirchmunk server URL (e.g., http://server:8584)",
+    )
+    upload_parser.add_argument(
+        "--collection",
+        default="default",
+        help="Collection name on the server (default: 'default')",
+    )
+    upload_parser.add_argument(
+        "--include",
+        default=None,
+        help="Comma-separated file patterns to include (e.g., '*.pdf,*.docx')",
+    )
+    upload_parser.set_defaults(func=cmd_upload)
 
     # === version command ===
     version_parser = subparsers.add_parser("version", help="Show version information")

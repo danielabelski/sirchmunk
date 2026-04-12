@@ -23,7 +23,7 @@ import {
   ChevronsLeft,
   GripVertical,
 } from "lucide-react";
-import { apiUrl } from "@/lib/api";
+import { apiUrl, getAuthHeaders } from "@/lib/api";
 import { getTranslation, type Language } from "@/lib/i18n";
 import { useGlobal } from "@/context/GlobalContext";
 
@@ -139,7 +139,7 @@ export default function RightSidebar({
   const fetchHubFiles = async () => {
     setIsLoadingFiles(true);
     try {
-      const response = await fetch(apiUrl("/api/v1/hub/files"));
+      const response = await fetch(apiUrl("/api/v1/hub/files"), { headers: { ...getAuthHeaders() } });
       const result = await response.json();
       if (result.success) {
         setHubFiles(result.data);
@@ -157,6 +157,7 @@ export default function RightSidebar({
     try {
       const response = await fetch(apiUrl("/api/v1/hub/sync"), {
         method: "POST",
+        headers: { ...getAuthHeaders() },
       });
       const result = await response.json();
       if (result.success) {
@@ -178,6 +179,7 @@ export default function RightSidebar({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...getAuthHeaders(),
         },
         body: JSON.stringify({
           // Add any necessary data based on current context

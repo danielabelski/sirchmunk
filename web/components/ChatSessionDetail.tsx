@@ -19,7 +19,7 @@ import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import { apiUrl } from "@/lib/api";
+import { apiUrl, getAuthHeaders } from "@/lib/api";
 import { processLatexContent } from "@/lib/latex";
 import { useGlobal } from "@/context/GlobalContext";
 import { getTranslation, type Language } from "@/lib/i18n";
@@ -80,6 +80,7 @@ export default function ChatSessionDetail({
       try {
         const response = await fetch(
           apiUrl(`/api/v1/chat/sessions/${sessionId}`),
+          { headers: { ...getAuthHeaders() } },
         );
         if (!response.ok) {
           throw new Error("Failed to load session");

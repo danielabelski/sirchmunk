@@ -34,6 +34,18 @@ export const API_BASE_URL: string = (() => {
  * @param path - API path (e.g., '/api/v1/knowledge/list')
  * @returns Full URL (e.g., 'http://localhost:8000/api/v1/knowledge/list')
  */
+/**
+ * Return Authorization header if an API token is configured in localStorage.
+ */
+export function getAuthHeaders(): Record<string, string> {
+  const token =
+    typeof window !== "undefined"
+      ? localStorage.getItem("sirchmunk_api_token") || ""
+      : "";
+  if (!token) return {};
+  return { Authorization: `Bearer ${token}` };
+}
+
 export function apiUrl(path: string): string {
   // Remove leading slash if present to avoid double slashes
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;

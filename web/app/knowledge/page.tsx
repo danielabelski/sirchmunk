@@ -17,7 +17,7 @@ import {
   ChevronRight,
   RefreshCw,
 } from "lucide-react";
-import { apiUrl } from "@/lib/api";
+import { apiUrl, getAuthHeaders } from "@/lib/api";
 import { getTranslation, type Language } from "@/lib/i18n";
 import { useGlobal } from "@/context/GlobalContext";
 
@@ -103,7 +103,7 @@ export default function KnowledgePage() {
       }
       setError("");
 
-      const response = await fetch(apiUrl("/api/v1/knowledge/stats"));
+      const response = await fetch(apiUrl("/api/v1/knowledge/stats"), { headers: { ...getAuthHeaders() } });
       if (!response.ok) throw new Error("Failed to fetch stats");
 
       const result = await response.json();
@@ -122,7 +122,7 @@ export default function KnowledgePage() {
 
   const fetchPatterns = async () => {
     try {
-      const response = await fetch(apiUrl("/api/v1/knowledge/patterns?limit=15"));
+      const response = await fetch(apiUrl("/api/v1/knowledge/patterns?limit=15"), { headers: { ...getAuthHeaders() } });
       if (!response.ok) return;
 
       const result = await response.json();
@@ -144,7 +144,7 @@ export default function KnowledgePage() {
     setRefreshing(true);
     try {
       // Force backend to reload from parquet first, then fetch fresh data
-      await fetch(apiUrl("/api/v1/knowledge/refresh"), { method: "POST" });
+      await fetch(apiUrl("/api/v1/knowledge/refresh"), { method: "POST", headers: { ...getAuthHeaders() } });
     } catch {
       // Non-critical: auto-reload in backend will still detect changes
     }

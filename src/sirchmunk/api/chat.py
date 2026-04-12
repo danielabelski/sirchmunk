@@ -8,7 +8,7 @@ import platform
 import re
 import time
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Request
 from typing import Dict, Any, List, Optional, Union, Tuple
 from pydantic import BaseModel
 import json
@@ -25,6 +25,14 @@ from sirchmunk.search import AgenticSearch
 from sirchmunk.llm.openai_chat import OpenAIChat
 from sirchmunk.api.components.history_storage import HistoryStorage
 from sirchmunk.api.components.monitor_tracker import llm_usage_tracker
+from sirchmunk.api.security import (
+    is_path_allowed,
+    is_path_allowed_strict,
+    verify_ws_token,
+    validate_user_path,
+    file_browser_limiter,
+    audit_logger,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,16 +80,25 @@ def _classify_error(exc: Exception) -> str:
 def _resolve_rag_paths(kb_name: str) -> Tuple[List[str], str]:
     """Resolve RAG search paths from frontend kb_name or SIRCHMUNK_SEARCH_PATHS.
 
-    When the user has set SIRCHMUNK_SEARCH_PATHS in settings, it takes effect
-    when the chat does not send a specific kb_name (e.g. no path selected in UI).
-    Returns (paths_list, display_name_for_sources).
+    User-provided paths are validated against the whitelist and filesystem
+    constraints.  Invalid entries are silently dropped.
     """
     def _parse(s: str) -> List[str]:
         return [p.strip() for p in (s or "").split(",") if p.strip()]
 
     if kb_name and _parse(kb_name):
-        paths = _parse(kb_name)
-        return paths, kb_name
+        raw_paths = _parse(kb_name)
+        validated: List[str] = []
+        for rp in raw_paths:
+            ok, result = validate_user_path(rp)
+            if ok:
+                validated.append(result)
+            else:
+                logger.debug("Rejected user path %r: %s", rp, result)
+        if validated:
+            return validated, ", ".join(os.path.basename(p) for p in validated)
+
+    # Fallback to environment variable
     env_paths = os.getenv("SIRCHMUNK_SEARCH_PATHS", "")
     paths = _parse(env_paths)
     display = ", ".join(paths) if paths else ""
@@ -251,13 +268,21 @@ history_storage = HistoryStorage()
 chat_sessions = {}
 
 # Active WebSocket connections
+_MAX_WS_CONNECTIONS = int(os.getenv("SIRCHMUNK_MAX_WS_CONNECTIONS", "100"))
+
+
 class ChatConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
 
-    async def connect(self, websocket: WebSocket):
+    async def connect(self, websocket: WebSocket) -> bool:
+        """Accept a WebSocket connection if capacity allows."""
+        if len(self.active_connections) >= _MAX_WS_CONNECTIONS:
+            await websocket.close(code=1013, reason="Server at capacity")
+            return False
         await websocket.accept()
         self.active_connections.append(websocket)
+        return True
 
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
@@ -479,7 +504,7 @@ def get_envs() -> Dict[str, Any]:
     api_key = os.getenv("LLM_API_KEY", "")
     model_name = os.getenv("LLM_MODEL_NAME", "gpt-5.2")
 
-    print(f"[ENV CONFIG] base_url={base_url}, model_name={model_name}, api_key={'***' if api_key else '(not set)'}")
+    logger.debug("LLM config loaded: base_url=%s, model=%s", base_url, model_name)
 
     return dict(
         base_url=base_url,
@@ -518,7 +543,7 @@ def get_search_instance(log_callback=None):
     try:
         envs = get_envs()
     except Exception as e:
-        print(f"[WARNING] Please config ENVs: LLM_BASE_URL, LLM_API_KEY, LLM_MODEL_NAME. Error: {e}")
+        logger.warning("LLM configuration incomplete, check LLM_BASE_URL/LLM_API_KEY/LLM_MODEL_NAME")
         envs = {
             "base_url": os.getenv("LLM_BASE_URL", "https://api.openai.com/v1"),
             "api_key": os.getenv("LLM_API_KEY", ""),
@@ -555,6 +580,7 @@ def get_search_instance(log_callback=None):
             reuse_knowledge=enable_cluster_reuse,
             cluster_sim_threshold=cluster_sim_threshold,
             cluster_sim_top_k=cluster_sim_top_k,
+            work_path=os.getenv("SIRCHMUNK_WORK_PATH") or None,
         )
         _chat_search_config = current_config
         return _chat_search_instance
@@ -637,7 +663,7 @@ def open_file_dialog(dialog_type: str = "files", multiple: bool = True) -> List[
             selected_paths = [res] if res else []
 
     except Exception as e:
-        print(f"Dialog Error: {e}")
+        logger.warning("File dialog error")
         selected_paths = []
 
     finally:
@@ -1104,7 +1130,14 @@ async def chat_websocket(websocket: WebSocket):
     3. Chat + Web Search: enable_rag=False, enable_web_search=True (mock)
     4. Chat + RAG + Web Search: enable_rag=True, enable_web_search=True (RAG real, web mock)
     """
-    await manager.connect(websocket)
+    # Auth check
+    if not verify_ws_token(websocket):
+        await websocket.close(code=1008, reason="Unauthorized")
+        return
+    # Connection limit check
+    connected = await manager.connect(websocket)
+    if not connected:
+        return
     
     try:
         while True:
@@ -1120,10 +1153,7 @@ async def chat_websocket(websocket: WebSocket):
             enable_web_search = request_data.get("enable_web_search", False)
             search_mode = request_data.get("search_mode", "FAST")
 
-            print(f"\n{'='*60}")
-            print(f"[CHAT REQUEST] Message: {message[:50]}...")
-            print(f"[CHAT REQUEST] KB: {kb_name}, RAG: {enable_rag}, Web: {enable_web_search}, Mode: {search_mode}")
-            print(f"{'='*60}\n")
+            logger.debug("Chat request: rag=%s, mode=%s", enable_rag, search_mode)
             
             # Generate or use existing session ID
             if not session_id:
@@ -1259,13 +1289,12 @@ async def chat_websocket(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     except Exception as e:
-        print(f"[ERROR] WebSocket error: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.error("WebSocket error occurred")
+        logger.exception("WebSocket exception details")
         try:
             await manager.send_personal_message(json.dumps({
                 "type": "error",
-                "message": f"An error occurred: {str(e)}"
+                "message": "An internal error occurred. Please try again."
             }), websocket)
         except:
             pass
@@ -1318,17 +1347,22 @@ async def open_file_picker(request: Dict[str, Any]):
         }
 
 @router.get("/file-picker/status")
-async def get_file_picker_status():
+async def get_file_picker_status(request: Request):
     """Check if file picker is available on this system"""
     avail = _ensure_tkinter()
+    client_host = request.client.host if request.client else ""
+    is_local_client = client_host in ("127.0.0.1", "::1", "localhost")
+    effective_tkinter = avail and is_local_client
     return {
         "success": True,
         "data": {
-            "tkinter_available": avail,
+            "tkinter_available": effective_tkinter,
+            "deployment_mode": "local" if effective_tkinter else "remote",
+            "upload_enabled": True,
             "server_browser": True,
             "supported_types": ["files", "directory"],
             "features": {
-                "multiple_files": avail,
+                "multiple_files": effective_tkinter,
                 "directory_selection": True,
                 "absolute_paths": True
             }
@@ -1336,15 +1370,52 @@ async def get_file_picker_status():
     }
 
 
+@router.get("/file-browser/defaults")
+async def file_browser_defaults():
+    """Return the default browse path and configuration status."""
+    work_path = os.getenv("SIRCHMUNK_WORK_PATH", os.path.expanduser("~/.sirchmunk"))
+    default_path = os.path.join(work_path, "data")
+    env_raw = os.getenv("SIRCHMUNK_ALLOWED_PATHS", "").strip()
+    return {
+        "default_path": default_path,
+        "allowed_paths_configured": bool(env_raw),
+    }
+
+
 @router.get("/file-browser")
-async def browse_files(path: str = "/", show_hidden: bool = False):
+async def browse_files(request: Request, path: str = "", show_hidden: bool = False):
     """List files and directories at the given path (headless-safe alternative to Tkinter)"""
+    client_ip = request.client.host if request.client else "unknown"
+
+    # P1.2: Rate limiting
+    if not file_browser_limiter.is_allowed(client_ip):
+        return {"success": False, "error": "Too many requests, please try again later"}
+
     try:
+        # Resolve default path first
+        if not path or not path.strip():
+            work_path = os.getenv("SIRCHMUNK_WORK_PATH", os.path.expanduser("~/.sirchmunk"))
+            path = os.path.join(work_path, "data")
+
         abs_path = os.path.abspath(path)
+
+        is_remote = client_ip not in ("127.0.0.1", "::1", "localhost")
+        if is_remote:
+            # Remote mode: always enforce allowed paths (includes default data/uploads)
+            if not is_path_allowed_strict(abs_path):
+                logger.warning("Remote file browser access denied: %s from %s", abs_path, client_ip)
+                audit_logger.log(client_ip=client_ip, action="browse", path=path, result="denied")
+                return {"success": False, "error": "Permission denied: path is not in the allowed list"}
+        else:
+            # Local mode: unrestricted when SIRCHMUNK_ALLOWED_PATHS not configured
+            if not is_path_allowed(abs_path):
+                logger.warning("File browser access denied: %s from %s", abs_path, client_ip)
+                audit_logger.log(client_ip=client_ip, action="browse", path=path, result="denied")
+                return {"success": False, "error": "Permission denied: path is not in the allowed list"}
         if not os.path.exists(abs_path):
-            return {"success": False, "error": f"Path does not exist: {abs_path}"}
+            return {"success": False, "error": "The specified path is not accessible"}
         if not os.path.isdir(abs_path):
-            return {"success": False, "error": f"Path is not a directory: {abs_path}"}
+            return {"success": False, "error": "The specified path is not accessible"}
 
         items = []
         for entry in os.scandir(abs_path):
@@ -1364,6 +1435,7 @@ async def browse_files(path: str = "/", show_hidden: bool = False):
 
         items.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
 
+        audit_logger.log(client_ip=client_ip, action="browse", path=path, result="success")
         return {
             "success": True,
             "data": {
@@ -1373,9 +1445,13 @@ async def browse_files(path: str = "/", show_hidden: bool = False):
             }
         }
     except PermissionError:
-        return {"success": False, "error": f"Permission denied: {abs_path}"}
+        logger.warning("Permission denied for path %s from %s", abs_path, client_ip)
+        audit_logger.log(client_ip=client_ip, action="browse", path=path, result="permission_denied")
+        return {"success": False, "error": "Permission denied: path is not in the allowed list"}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.exception("Unexpected error in file browser")
+        audit_logger.log(client_ip=client_ip, action="browse", path=path, result="error")
+        return {"success": False, "error": "An error occurred"}
 
 # Chat session management endpoints
 @router.get("/chat/sessions")
@@ -1483,7 +1559,9 @@ async def get_search_suggestions(query: str, kb_name: str = "", limit: int = 8):
         if not paths:
             return {"success": True, "data": [], "query": query}
 
-        retriever = GrepRetriever(work_path=DEFAULT_SIRCHMUNK_WORK_PATH)
+        retriever = GrepRetriever(
+            work_path=os.getenv("SIRCHMUNK_WORK_PATH") or DEFAULT_SIRCHMUNK_WORK_PATH
+        )
         escaped = _re.escape(query.strip())
         results = await retriever.retrieve_by_filename(
             patterns=[escaped],
