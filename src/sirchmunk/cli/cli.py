@@ -1102,6 +1102,12 @@ def cmd_mcp_serve(args: argparse.Namespace) -> int:
         Exit code
     """
     try:
+        # Resolve work path from --work-path or default
+        work_path = Path(
+            getattr(args, "work_path", None) or str(_get_default_work_path())
+        ).expanduser().resolve()
+        os.environ["SIRCHMUNK_WORK_PATH"] = str(work_path)
+
         # Override transport from command-line if specified
         if args.transport:
             os.environ["MCP_TRANSPORT"] = args.transport
@@ -1121,7 +1127,6 @@ def cmd_mcp_serve(args: argparse.Namespace) -> int:
             _setup_stdio_safe_environment()
 
         # Load .env before importing config (so env vars are available)
-        work_path = _get_default_work_path().expanduser().resolve()
         env_file = work_path / ".env"
         if env_file.exists():
             _load_env_file(env_file)
@@ -1492,6 +1497,11 @@ Examples:
     mcp_serve_parser.add_argument("--host", help="Host for HTTP transport (default: localhost)")
     mcp_serve_parser.add_argument("--port", type=int, help="Port for HTTP transport (default: 8080)")
     mcp_serve_parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    mcp_serve_parser.add_argument(
+        "--work-path",
+        default=str(_get_default_work_path()),
+        help="Working directory (default: ~/.sirchmunk)",
+    )
     mcp_serve_parser.set_defaults(func=cmd_mcp_serve)
 
     # sirchmunk mcp version
