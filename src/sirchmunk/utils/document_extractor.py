@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, ClassVar, List, Optional, Sequence, Union
 
 from loguru import logger
+from sirchmunk.utils.access_policy import AccessPolicy, bind_access, current_policy, guard_source
 
 
 # ---------------------------------------------------------------------------
@@ -32,6 +33,7 @@ def _extraction_worker(
     file_path: str,
     profile_dict: dict[str, Any],
     pipe_w: mp.connection.Connection,
+    access_policy: Optional[AccessPolicy] = None,
 ) -> None:
     """Child process entry point: run kreuzberg, send result via pipe, exit.
 
@@ -47,7 +49,8 @@ def _extraction_worker(
                 ExtractionProfile,
             )
             profile = ExtractionProfile(**profile_dict)
-            output = await DocumentExtractor.extract(file_path, profile)
+            with bind_access(access_policy):
+                output = await DocumentExtractor.extract(file_path, profile)
             return {
                 "content": output.content,
                 "mime_type": output.mime_type,
@@ -70,6 +73,7 @@ def _extraction_worker(
 def _run_extraction_in_child(
     file_path: str,
     profile_dict: dict[str, Any],
+    access_policy: Optional[AccessPolicy] = None,
 ) -> dict[str, Any]:
     """Spawn an isolated child process, wait for its result.
 
@@ -79,7 +83,7 @@ def _run_extraction_in_child(
     pipe_r, pipe_w = mp.Pipe(duplex=False)
     proc = mp.Process(
         target=_extraction_worker,
-        args=(file_path, profile_dict, pipe_w),
+        args=(file_path, profile_dict, pipe_w, access_policy),
         daemon=True,
     )
     proc.start()
@@ -277,6 +281,7 @@ class DocumentExtractor:
     # Public API -----------------------------------------------------------
 
     @staticmethod
+    @guard_source("file_path")
     async def extract(
         file_path: Union[str, Path],
         profile: Optional[ExtractionProfile] = None,
@@ -325,6 +330,7 @@ class DocumentExtractor:
             raise
 
     @staticmethod
+    @guard_source("file_path")
     async def extract_isolated(
         file_path: Union[str, Path],
         profile: Optional[ExtractionProfile] = None,
@@ -354,6 +360,7 @@ class DocumentExtractor:
                 _run_extraction_in_child,
                 str(file_path),
                 profile_dict,
+                current_policy(),
             )
             return ExtractionOutput(
                 content=raw["content"],
@@ -399,6 +406,7 @@ class DocumentExtractor:
             raise
 
     @staticmethod
+    @guard_source("file_paths")
     async def batch_extract(
         file_paths: Sequence[Union[str, Path]],
         profile: Optional[ExtractionProfile] = None,
@@ -445,6 +453,7 @@ class DocumentExtractor:
     # Page-level extraction -------------------------------------------------
 
     @staticmethod
+    @guard_source("file_path")
     def extract_pages(
         file_path: Union[str, Path],
         pages: list[int],

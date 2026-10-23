@@ -104,7 +104,11 @@ async def auth_middleware(request: Request, call_next):
         or request.method == "OPTIONS"
     )
     if not exempt and path.startswith("/api/"):
-        await verify_token(request)
+        try:
+            await verify_token(request)
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail},
+                                headers={"WWW-Authenticate": "Bearer"})
     response = await call_next(request)
     return response
 

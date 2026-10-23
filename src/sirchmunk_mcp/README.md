@@ -383,6 +383,18 @@ Options:
   --log-level {DEBUG,INFO,WARNING,ERROR}  Logging level
 ```
 
+### HTTP Security
+
+HTTP mode uses legacy SSE (`/sse` and `/messages/`). Set `SIRCHMUNK_API_TOKEN`
+and send `Authorization: Bearer <token>` on every request, including localhost access.
+
+- Restrict documents with `SIRCHMUNK_ALLOWED_PATHS`; `SIRCHMUNK_SEARCH_PATHS` only sets defaults.
+- HTTP also allows the work directory's `data/uploads` and never falls back to cwd.
+- Configure external hosts and origins with `MCP_ALLOWED_HOSTS` and `SIRCHMUNK_ALLOWED_ORIGINS`.
+- stdio needs no HTTP token but respects an explicitly configured path allowlist.
+
+Use TLS and least-privilege, read-only document mounts. Keep secrets outside authorized paths.
+
 ### `sirchmunk mcp version`
 
 Show MCP version information.

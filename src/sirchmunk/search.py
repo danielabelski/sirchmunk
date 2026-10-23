@@ -64,6 +64,10 @@ from sirchmunk.storage.knowledge_storage import KnowledgeStorage
 from sirchmunk.utils.constants import DEFAULT_SIRCHMUNK_WORK_PATH, GREP_TIMEOUT
 from sirchmunk.utils.embedding_util import EmbeddingUtil
 from sirchmunk.utils.deps import check_dependencies
+from sirchmunk.utils.access_policy import (
+    cache_partition, cached_sources_allowed, current_policy, guard_source,
+    open_source, read_source_text, require_source, scoped_search, source_allowed,
+)
 from sirchmunk.utils import create_logger, LogCallback
 from loguru import logger as _loguru_logger
 from sirchmunk.utils.install_rga import install_rga
@@ -145,6 +149,8 @@ class _PathScope:
 
     def contains(self, file_path: str) -> bool:
         """Return True when *file_path* falls within the search scope."""
+        if not source_allowed(file_path):
+            return False
         if self._empty:
             return True
         if not file_path:
@@ -353,7 +359,7 @@ class _TreeNavCache:
     @staticmethod
     def _key(file_path: str, query: str) -> str:
         import hashlib
-        return hashlib.md5(f"{file_path}:{query}".encode()).hexdigest()
+        return hashlib.md5(cache_partition(f"{file_path}:{query}").encode()).hexdigest()
 
     def get(self, file_path: str, query: str) -> Optional[List[Any]]:
         """Retrieve cached navigation leaves for a file+query pair."""
@@ -807,8 +813,8 @@ class AgenticSearch(BaseSearch):
             )
 
             existing_cluster = await self.knowledge_storage.get(best_match["id"])
-            if not existing_cluster:
-                await self._logger.warning("Failed to retrieve cluster, falling back to new search")
+            if not existing_cluster or not cached_sources_allowed(existing_cluster):
+                await self._logger.warning("Failed to retrieve authorized cluster, falling back to new search")
                 return None
 
             # Validate cluster has usable content BEFORE mutating it
@@ -904,7 +910,7 @@ class AgenticSearch(BaseSearch):
                 cid = match["id"]
                 cluster_ids.append(cid)
                 c = await self.knowledge_storage.get(cid)
-                if not c:
+                if not c or not cached_sources_allowed(c):
                     continue
                 for p in getattr(c, "patterns", []) or []:
                     if p and p not in patterns:
@@ -2089,6 +2095,7 @@ class AgenticSearch(BaseSearch):
         # Cache key: paths + filter params (all affect tool behaviour)
         cache_key = (
             tuple(sorted(paths)),
+            cache_partition("tools"),
             max_depth,
             tuple(include) if include else None,
             tuple(exclude) if exclude else None,
@@ -2293,6 +2300,7 @@ class AgenticSearch(BaseSearch):
     # Unified search entry point
     # ------------------------------------------------------------------
 
+    @scoped_search
     async def search(
         self,
         query: str,
@@ -3315,7 +3323,7 @@ class AgenticSearch(BaseSearch):
         query: str,
         paths: List[str],
     ) -> Optional[str]:
-        """Short-circuit for document-level queries (e.g. "请总结这篇文档").
+        """Short-circuit for document-level queries (e.g. "summarize this document").
 
         Uses the LLM to classify query intent (language-agnostic).  When
         a whole-document operation is detected **and** suitable files exist
@@ -3421,6 +3429,7 @@ class AgenticSearch(BaseSearch):
     _SUMMARY_CHUNK_CHARS = 50_000
     _SUMMARY_MAX_FILE_SIZE = 200 * 1024 * 1024  # 200 MB — sampling handles large files
 
+    @guard_source("paths")
     async def _summarize_documents(
         self,
         query: str,
@@ -3825,7 +3834,7 @@ class AgenticSearch(BaseSearch):
             prompt = prompt + tree_hints
 
         # Step 1 LLM call + compile hints + tree probe run in parallel
-        # (GAP 3: hints前置化, GAP 1: 树导航主动化)
+        # (GAP 3: early hints, GAP 1: proactive tree navigation)
         _step1_llm_task = self.llm.achat(
             messages=[{"role": "user", "content": prompt}],
             stream=False,
@@ -4194,7 +4203,7 @@ class AgenticSearch(BaseSearch):
                 for bf in best_files:
                     if chars >= self._FAST_MAX_EVIDENCE_CHARS:
                         break
-                    fp = bf["path"]
+                    fp = require_source(bf["path"])
                     fn = Path(fp).name
                     ext = Path(fp).suffix.lower()
                     ev = None
@@ -4287,9 +4296,10 @@ class AgenticSearch(BaseSearch):
                     # 2. Small file: read entirely (only if tree didn't provide evidence)
                     if ev is None and ext in self._FAST_TEXT_EXTENSIONS:
                         try:
+                            require_source(fp)
                             sz = Path(fp).stat().st_size
                             if sz < self._FAST_SMALL_FILE_THRESHOLD:
-                                full = Path(fp).read_text(errors="replace")
+                                full = read_source_text(fp, errors="replace")
                                 if len(full) < self._FAST_SMALL_FILE_THRESHOLD:
                                     ev = f"[{fn}]\n{full}"
                         except Exception:
@@ -4884,6 +4894,7 @@ class AgenticSearch(BaseSearch):
 
         return pruned if pruned else None
 
+    @guard_source("file_path")
     async def _fast_sample_evidence(
         self,
         file_path: str,
@@ -4968,6 +4979,7 @@ class AgenticSearch(BaseSearch):
         return await self._fast_read_file_head(file_path)
 
     @staticmethod
+    @guard_source("file_path")
     def _read_context_windows(
         file_path: str,
         hit_lines: List[int],
@@ -4992,7 +5004,7 @@ class AgenticSearch(BaseSearch):
 
         # Read file and extract windows
         try:
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            with open_source(file_path, "r", encoding="utf-8", errors="replace") as f:
                 all_lines = f.readlines()
         except Exception:
             return None
@@ -5019,6 +5031,7 @@ class AgenticSearch(BaseSearch):
         return "\n[...]\n".join(parts)
 
     @classmethod
+    @guard_source("file_path")
     async def _fast_read_file_head(
         cls, file_path: str, max_chars: int = 8_000,
     ) -> str:
@@ -5026,7 +5039,7 @@ class AgenticSearch(BaseSearch):
         try:
             p = Path(file_path)
             if p.suffix.lower() in cls._FAST_TEXT_EXTENSIONS:
-                text = p.read_text(encoding="utf-8", errors="replace")
+                text = read_source_text(p, encoding="utf-8", errors="replace")
             else:
                 from sirchmunk.utils.file_utils import fast_extract
                 result = await fast_extract(file_path)
@@ -5048,7 +5061,7 @@ class AgenticSearch(BaseSearch):
         try:
             entries = json.loads(catalog_path.read_text(encoding="utf-8"))
             if isinstance(entries, list) and entries:
-                return entries
+                return [entry for entry in entries if cached_sources_allowed(entry)]
         except Exception:
             pass
         return None
@@ -5250,7 +5263,7 @@ class AgenticSearch(BaseSearch):
         )
 
         # For CJK text, also extract consecutive CJK character runs (2-6 chars)
-        # so that e.g. "停车位申请条件" yields ["停车位申请条件", "停车位", "申请条件", ...]
+        # Preserve full phrases and shorter n-grams from unsegmented text.
         cjk_runs = _re.findall(r'[\u4e00-\u9fff\u3400-\u4dbf]{2,}', summary_text)
         # Generate sub-phrases from long CJK runs (bigrams/trigrams/4-grams)
         cjk_ngrams: List[str] = []
@@ -5374,6 +5387,7 @@ class AgenticSearch(BaseSearch):
             return None
         return f"Source Document: {name}\nDocument Overview: {summary}"
 
+    @guard_source("file_path")
     async def _tree_guided_sample(
         self,
         file_path: str,
@@ -5481,7 +5495,7 @@ class AgenticSearch(BaseSearch):
                     elif getattr(leaf, 'summary', None):
                         page_segment_map[id(leaf)] = leaf.summary
             except (FileNotFoundError, PermissionError):
-                raise  # 文件系统错误应传播
+                raise  # Propagate filesystem errors.
             except Exception as e:
                 _loguru_logger.warning(
                     f"[TreeSample] Page extraction failed for {fname}: {e}, "
@@ -5596,7 +5610,8 @@ class AgenticSearch(BaseSearch):
         nav_cache: Dict[str, str],
     ) -> Optional[str]:
         """``_navigate_tree_for_evidence`` with per-query dedup cache."""
-        cache_key = f"{file_path}::{query}"
+        require_source(file_path)
+        cache_key = cache_partition(f"{file_path}::{query}")
         if cache_key in nav_cache:
             return nav_cache[cache_key]
         result = await self._navigate_tree_for_evidence(file_path, query)
@@ -6223,6 +6238,7 @@ class AgenticSearch(BaseSearch):
         header = f"[{fname} \u2192 {leaf.title}{page_info}{type_tag}]"
         parts.append(f"{header}\n{text}")
 
+    @guard_source("file_path")
     async def _navigate_tree_for_evidence(
         self,
         file_path: str,
@@ -6305,7 +6321,7 @@ class AgenticSearch(BaseSearch):
                             parts, fname, leaf, leaf.summary,
                         )
             except (FileNotFoundError, PermissionError):
-                raise  # 文件系统错误应传播
+                raise  # Propagate filesystem errors.
             except Exception as e:
                 _loguru_logger.warning(
                     f"[TreeNav] Page extraction failed for {fname}: {e}, "
@@ -7976,6 +7992,7 @@ class AgenticSearch(BaseSearch):
         return any(Path(p).is_dir() for p in paths)
 
     @staticmethod
+    @guard_source("paths")
     def _resolve_file_hints(
         paths: List[str],
         file_hints: List[str],
@@ -7984,7 +8001,7 @@ class AgenticSearch(BaseSearch):
         """Resolve file_hints (filenames) to absolute paths under *paths*.
 
         Lightweight name-only search: no metadata extraction. Used when the
-        user clearly asks for a specific document (e.g. "总结《foo.pdf》")
+        user clearly asks for a specific document (e.g. "summarize foo.pdf")
         so we can skip full dir scan + LLM rank.
 
         Returns:
@@ -8021,7 +8038,7 @@ class AgenticSearch(BaseSearch):
                 for entry in sorted(d.iterdir(), key=lambda p: p.name):
                     if len(out) >= 20:
                         return
-                    if entry.name.startswith("."):
+                    if entry.name.startswith(".") or not source_allowed(entry):
                         continue
                     if entry.is_file():
                         for hint in hints:
@@ -8136,6 +8153,8 @@ class AgenticSearch(BaseSearch):
             seen_kw: set = set()
 
             def _collect_cluster(c: KnowledgeCluster) -> None:
+                if not cached_sources_allowed(c):
+                    return
                 for ev in getattr(c, "evidences", []):
                     fp = str(getattr(ev, "file_or_url", ""))
                     if fp and fp not in seen_paths and Path(fp).exists():
@@ -8204,7 +8223,8 @@ class AgenticSearch(BaseSearch):
                     t = DocumentTree.from_json(
                         tree_file.read_text(encoding="utf-8")
                     )
-                    if t.root and t.file_path and Path(t.file_path).exists():
+                    if (t.root and t.file_path and source_allowed(t.file_path)
+                            and Path(t.file_path).exists()):
                         trees.append(t)
                 except Exception:
                     continue
@@ -8437,7 +8457,7 @@ class AgenticSearch(BaseSearch):
                         )
                     except Exception:
                         continue
-                    if not tree.root or not tree.file_path:
+                    if not tree.root or not tree.file_path or not source_allowed(tree.file_path):
                         continue
                     summary_lower = (tree.root.summary or "").lower()
                     if any(kw in summary_lower for kw in kw_lower):
@@ -10872,6 +10892,7 @@ class AgenticSearch(BaseSearch):
             )
         return True, []
 
+    @guard_source("file_path")
     async def _extract_structured_anchor_content(
         self,
         file_path: str,
@@ -10912,6 +10933,7 @@ class AgenticSearch(BaseSearch):
             return None
         return f"[{Path(file_path).name} structure anchors]\n" + "\n\n---\n\n".join(parts)
 
+    @guard_source("file_path")
     async def _extract_non_paginated_content(
         self,
         file_path: str,
@@ -10981,6 +11003,7 @@ class AgenticSearch(BaseSearch):
         return None
 
     @classmethod
+    @guard_source("path")
     def _is_plain_text_candidate(cls, path: Path, ext: str) -> bool:
         """Return True for files safe to read as text.
 
@@ -10994,7 +11017,7 @@ class AgenticSearch(BaseSearch):
         if ext:
             return False
         try:
-            with path.open("rb") as fh:
+            with open_source(path, "rb") as fh:
                 sample = fh.read(4096)
         except Exception:
             return False
@@ -11007,11 +11030,12 @@ class AgenticSearch(BaseSearch):
         return replacement_ratio < 0.02
 
     @classmethod
+    @guard_source("path")
     def _read_text_evidence(cls, path: Path, query: str, budget: int) -> str:
         """Read text evidence from *path*, using keyword windows for large files."""
         size = path.stat().st_size
         if size <= cls._FAST_SMALL_FILE_THRESHOLD:
-            return path.read_text(encoding="utf-8", errors="replace")[:budget]
+            return read_source_text(path, encoding="utf-8", errors="replace")[:budget]
 
         windowed = cls._read_query_windows(path, query, budget)
         if windowed.strip():
@@ -11019,10 +11043,11 @@ class AgenticSearch(BaseSearch):
 
         # Last-resort fallback: keep the pipeline from returning zero evidence
         # for plain-text files even when keyword matching fails.
-        with path.open("r", encoding="utf-8", errors="replace") as fh:
+        with open_source(path, "r", encoding="utf-8", errors="replace") as fh:
             return fh.read(budget)
 
     @classmethod
+    @guard_source("path")
     def _read_query_windows(cls, path: Path, query: str, budget: int) -> str:
         """Extract compact line windows around query terms from a large text file."""
         terms = cls._query_terms_for_text_sampling(query)
@@ -11045,7 +11070,7 @@ class AgenticSearch(BaseSearch):
             emitted.add(line_no)
             chars += len(snippet)
 
-        with path.open("r", encoding="utf-8", errors="replace") as fh:
+        with open_source(path, "r", encoding="utf-8", errors="replace") as fh:
             for line_no, line in enumerate(fh, start=1):
                 lower = line.lower()
                 hit = any(term in lower for term in terms)
@@ -11098,6 +11123,7 @@ class AgenticSearch(BaseSearch):
         re.IGNORECASE,
     )
 
+    @guard_source("path")
     def _is_jsonlines_corpus(self, path: str) -> bool:
         """Detect if *path* is a JSON-lines corpus shard.
 
@@ -11118,7 +11144,7 @@ class AgenticSearch(BaseSearch):
         if self._GENERIC_SHARD_RE.match(stem):
             # Verify with a byte-probe that it looks like JSON-lines
             try:
-                with p.open("rb") as fh:
+                with open_source(p, "rb") as fh:
                     head = fh.read(512).lstrip()
                 if head.startswith(b"{") and b'"id"' in head[:256]:
                     self._jsonlines_cache[path] = True
@@ -11129,7 +11155,7 @@ class AgenticSearch(BaseSearch):
         # Heuristic 2: extensionless file whose first bytes are JSON objects
         if not p.suffix:
             try:
-                with p.open("rb") as fh:
+                with open_source(p, "rb") as fh:
                     head = fh.read(512).lstrip()
                 if head.startswith(b"{") and b'"id"' in head[:256]:
                     self._jsonlines_cache[path] = True
@@ -11245,6 +11271,7 @@ class AgenticSearch(BaseSearch):
 
         return None
 
+    @guard_source("shard_path")
     def _extract_articles_from_jsonlines(
         self,
         shard_path: str,
@@ -11268,7 +11295,7 @@ class AgenticSearch(BaseSearch):
         fname = Path(shard_path).name
 
         try:
-            with open(shard_path, "r", encoding="utf-8", errors="replace") as fh:
+            with open_source(shard_path, "r", encoding="utf-8", errors="replace") as fh:
                 for line in fh:
                     if chars >= budget:
                         break
@@ -12346,7 +12373,7 @@ class AgenticSearch(BaseSearch):
             elif is_paginated and fp not in file_total_pages:
                 try:
                     from pypdf import PdfReader
-                    file_total_pages[fp] = len(PdfReader(fp).pages)
+                    file_total_pages[fp] = len(PdfReader(require_source(fp)).pages)
                 except Exception:
                     pass
 
@@ -12775,7 +12802,7 @@ class AgenticSearch(BaseSearch):
             if not total:
                 try:
                     from pypdf import PdfReader
-                    total = len(PdfReader(fp).pages)
+                    total = len(PdfReader(require_source(fp)).pages)
                 except Exception:
                     total = 0
             if not total:
@@ -13155,7 +13182,7 @@ class AgenticSearch(BaseSearch):
     @staticmethod
     def _spec_hash(path_str: str) -> str:
         """Deterministic hash of a search path string for cache filename."""
-        return hashlib.sha256(path_str.encode("utf-8")).hexdigest()[:16]
+        return hashlib.sha256(cache_partition(path_str).encode("utf-8")).hexdigest()[:16]
 
     def _spec_file(self, path_str: str) -> Path:
         """Return the spec-cache file path for a given search path."""
@@ -13192,6 +13219,12 @@ class AgenticSearch(BaseSearch):
             try:
                 raw = spec_file.read_text(encoding="utf-8")
                 data = json.loads(raw)
+                if current_policy() is not None:
+                    sources = data.get("files_read", [])
+                    metadata = data.get("file_metadata", [])
+                    if (not sources or not all(source_allowed(p) for p in sources)
+                            or any(not source_allowed(fm.get("path")) for fm in metadata)):
+                        continue
 
                 # Skip if stale (handle both naive and aware timestamps)
                 cached_at = datetime.fromisoformat(data.get("cached_at", "2000-01-01"))
@@ -13258,7 +13291,7 @@ class AgenticSearch(BaseSearch):
                 try:
                     # Collect relevant info for this specific path
                     files_in_path = [
-                        f for f in context.read_file_ids if f.startswith(sp)
+                        f for f in context.read_file_ids if f.startswith(sp) and source_allowed(f)
                     ]
                     searches = context.search_history
 
@@ -13275,7 +13308,7 @@ class AgenticSearch(BaseSearch):
                     # Collect dir_scan metadata for files under this search path
                     file_metadata: List[Dict[str, Any]] = []
                     for cpath, cand in scan_candidates.items():
-                        if cpath.startswith(sp):
+                        if cpath.startswith(sp) and source_allowed(cpath):
                             entry: Dict[str, Any] = {
                                 "path": cand.path,
                                 "filename": cand.filename,

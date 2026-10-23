@@ -12,6 +12,7 @@ from typing import Any, Dict, List
 from mcp.types import Tool, TextContent
 
 from .service import SirchmunkService
+from sirchmunk.utils.access_policy import AccessDenied
 
 
 logger = logging.getLogger(__name__)
@@ -278,9 +279,11 @@ async def handle_sirchmunk_search(
             text=response_text,
         )]
     
-    except Exception as e:
-        logger.error(f"Search failed: {e}", exc_info=True)
-        error_message = f"Search failed: {str(e)}"
+    except AccessDenied:
+        raise
+    except Exception:
+        logger.exception("Search failed")
+        error_message = "Search failed; consult the server log"
         return [TextContent(
             type="text",
             text=error_message,

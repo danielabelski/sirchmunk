@@ -31,6 +31,10 @@ from ..utils.constants import (
     GREP_TIMEOUT,
 )
 from ..utils.file_utils import StorageStructure, fast_extract
+from ..utils.access_policy import (
+    cache_partition, current_policy, filter_retrieval_results, guard_source,
+    require_source, source_allowed,
+)
 from .base import BaseRetriever
 
 RGA_SEMAPHORE = asyncio.Semaphore(value=GREP_CONCURRENT_LIMIT)
@@ -76,6 +80,7 @@ class GrepRetriever(BaseRetriever):
         self.rga_cache.mkdir(parents=True, exist_ok=True)
         self._native_text_cache: Dict[str, Tuple[int, int, str]] = {}
 
+    @guard_source("path")
     async def retrieve_native_formats(
         self,
         terms: List[str],
@@ -118,6 +123,8 @@ class GrepRetriever(BaseRetriever):
             else:
                 continue
             for file_path in discovered:
+                if not source_allowed(file_path):
+                    continue
                 if not file_path.is_file() or file_path.suffix.lower() not in target_extensions:
                     continue
                 if any(file_path.match(pattern) for pattern in excluded):
@@ -140,16 +147,18 @@ class GrepRetriever(BaseRetriever):
             async with semaphore:
                 started_at = time.perf_counter()
                 try:
+                    require_source(file_path)
                     stat = file_path.stat()
                     key = str(file_path)
-                    cached = self._native_text_cache.get(key)
+                    cache_key = cache_partition(key)
+                    cached = self._native_text_cache.get(cache_key)
                     if cached and cached[:2] == (stat.st_size, stat.st_mtime_ns):
                         return key, cached[2], True, (
                             time.perf_counter() - started_at
                         ) * 1000
                     output = await fast_extract(file_path)
                     content = output.content or ""
-                    self._native_text_cache[key] = (
+                    self._native_text_cache[cache_key] = (
                         stat.st_size, stat.st_mtime_ns, content,
                     )
                     return key, content, False, (
@@ -211,6 +220,7 @@ class GrepRetriever(BaseRetriever):
         )
         return results[:max_results]
 
+    @guard_source("path")
     async def retrieve(
         self,
         terms: Union[str, List[str]],
@@ -279,6 +289,8 @@ class GrepRetriever(BaseRetriever):
 
         rga_cache_path = rga_cache_path or self.rga_cache
         rga_cache_path = str(Path(rga_cache_path).resolve())
+        if current_policy() is not None:
+            rga_cache_path = str(self.rga_cache / current_policy().fingerprint)
 
         # Multi-term logic routing
         if logic == "or":
@@ -353,6 +365,7 @@ class GrepRetriever(BaseRetriever):
                 f"Unsupported logic: {logic}. Choose from 'and', 'or', 'not'."
             )
 
+        results = filter_retrieval_results(results)
         # ====== Reranking Post-Processing ======
         if rank and not count_only and results:
             rank_kwargs = rank_kwargs or {}
@@ -802,6 +815,9 @@ class GrepRetriever(BaseRetriever):
         exclude = kwargs.get("exclude")
         file_type = kwargs.get("file_type")
         path = kwargs.get("path")
+        if current_policy() is not None:
+            path = ([require_source(p) for p in path] if isinstance(path, list)
+                    else require_source(path))
         timeout = kwargs.get("timeout", GREP_TIMEOUT)
 
         # Additional ripgrep-all args
@@ -1246,6 +1262,7 @@ class GrepRetriever(BaseRetriever):
 
         return kept_matches
 
+    @guard_source("path")
     async def list_files(
         self,
         path: Optional[str] = None,
@@ -1284,7 +1301,7 @@ class GrepRetriever(BaseRetriever):
             args.extend(["-t", file_type])
         if hidden:
             args.append("--hidden")
-        if follow_symlinks:
+        if follow_symlinks and current_policy() is None:
             args.append("--follow")
         if path:
             args.append(path)
@@ -1297,8 +1314,10 @@ class GrepRetriever(BaseRetriever):
                 f"ripgrep-all --files failed: {result['stderr'].strip()}"
             )
 
-        return result["stdout"].strip().splitlines() if result["stdout"].strip() else []
+        files = result["stdout"].strip().splitlines() if result["stdout"].strip() else []
+        return [p for p in files if source_allowed(p)]
 
+    @guard_source("path")
     async def retrieve_by_filename(
         self,
         patterns: Union[str, List[str]],
@@ -1381,6 +1400,8 @@ class GrepRetriever(BaseRetriever):
         # Filter files by patterns
         results = []
         for file_path in all_files:
+            if not source_allowed(file_path):
+                continue
             # Get both absolute and relative paths for proper handling
             file_path_obj = Path(file_path)
             filename = file_path_obj.name

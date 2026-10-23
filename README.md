@@ -32,7 +32,7 @@
 
 <br>
 
-[English](README.md) | [中文](README_zh.md)
+[English](README.md) | [Chinese](README_zh.md)
 
 
 ---
@@ -474,11 +474,18 @@ After running `sirchmunk init`, a `~/.sirchmunk/mcp_config.json` file is generat
 > In MCP Inspector: **Connect** → **Tools** → **List Tools** → `sirchmunk_search` → Input parameters (`query` and `paths`, e.g. `["/path/to/your_docs"]`) → **Run Tool**.
 > You can override the working directory temporarily with `sirchmunk mcp serve --work-path /path/to/your_work_path`.
 
+### HTTP Security
+
+HTTP mode uses legacy SSE and requires `SIRCHMUNK_API_TOKEN` with
+`Authorization: Bearer <token>` on every request; stdio does not require a token.
+Searches are limited to `SIRCHMUNK_ALLOWED_PATHS` and the work directory's `data/uploads`.
+Configure external access with `MCP_ALLOWED_HOSTS` and `SIRCHMUNK_ALLOWED_ORIGINS`.
+
 ### Features
 
 - **Multi-Mode Search**: DEEP mode (default, comprehensive 10-30s), FAST mode (greedy 2-5s), FILENAME_ONLY for fast file discovery
 - **Knowledge Cluster Management**: Automatic extraction, storage, and reuse of knowledge
-- **Standard MCP Protocol**: Works with stdio and Streamable HTTP transports
+- **Standard MCP Protocol**: Works with stdio and authenticated legacy SSE over HTTP
 
 📖 **For detailed documentation, see [Sirchmunk MCP README](src/sirchmunk_mcp/README.md)**.
 

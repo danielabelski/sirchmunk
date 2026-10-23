@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from sirchmunk.llm.openai_chat import OpenAIChat
 from sirchmunk.utils import LogCallback, create_logger
 from sirchmunk.utils.file_utils import get_fast_hash
+from sirchmunk.utils.access_policy import current_policy, require_source, source_allowed
 
 # File-size threshold: skip tree indexing only for truly small files.  Documents
 # below the LLM threshold use deterministic heading/paragraph trees.
@@ -340,7 +341,7 @@ class DocumentTreeIndexer:
         Returns:
             List of the most relevant leaf TreeNodes.
         """
-        if tree.root is None:
+        if not source_allowed(tree.file_path) or tree.root is None:
             return []
 
         print(f"SEARCH_WIKI_DEBUG [T2] navigate: query={query[:80]}, total_nodes={self._count_nodes(tree.root)}", flush=True)
@@ -435,7 +436,11 @@ class DocumentTreeIndexer:
         file_hash = get_fast_hash(file_path)
         if file_hash is None:
             return None
-        return self._load_cache(file_hash)
+        tree = self._load_cache(file_hash)
+        if current_policy() is not None and tree is not None:
+            if not source_allowed(tree.file_path) or require_source(tree.file_path) != require_source(file_path):
+                return None
+        return tree
 
     def has_tree(self, file_path: str) -> bool:
         """Check whether a cached tree index exists for the file."""
