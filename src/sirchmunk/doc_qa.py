@@ -1,7 +1,7 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 """
 Direct document QA — bypasses the full search pipeline when the user
-asks a document-level question (e.g., "请总结这篇文档", "summarize this file").
+asks a document-level question (e.g., "summarize this file").
 
 Intent detection is delegated to the LLM itself (language-agnostic, no
 hardcoded patterns).  When the LLM confirms a whole-document operation,

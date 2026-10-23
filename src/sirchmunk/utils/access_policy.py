@@ -1,5 +1,5 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
-"""请求级文件授权；独立于检索相关性、文件类型和传输协议。"""
+"""Request-scoped file authorization, independent of relevance, format, and transport."""
 from __future__ import annotations
 
 import contextvars
@@ -15,7 +15,7 @@ from typing import Any, Callable, Iterator, Optional
 
 
 class AccessDenied(PermissionError):
-    """统一拒绝错误，不向调用方披露越界路径或文件是否存在。"""
+    """Report access denial without exposing unauthorized paths or file existence."""
 
     def __init__(self) -> None:
         super().__init__("Access denied: path is outside the authorized search scope")
@@ -35,7 +35,7 @@ def _canonical(path: Any) -> Path:
 
 @dataclass(frozen=True)
 class AccessPolicy:
-    """每层是授权根的并集，多层取交集；嵌套请求只能收紧权限。"""
+    """Union roots within each layer and intersect layers; nested scopes only narrow access."""
 
     layers: tuple[tuple[tuple[str, bool], ...], ...]
 
@@ -91,7 +91,7 @@ def current_policy() -> Optional[AccessPolicy]:
 
 @contextmanager
 def bind_access(policy: Optional[AccessPolicy]) -> Iterator[None]:
-    """异常和取消后复原；None 不得解除外层网络请求的限制。"""
+    """Restore scope after errors or cancellation; None cannot remove an outer restriction."""
     parent = current_policy()
     effective = parent.intersect(policy) if parent and policy else parent or policy
     token = _ACCESS.set(effective)
@@ -109,7 +109,7 @@ def policy_from_env(work_path: Any = None, *, strict: bool = False) -> Optional[
     roots = [part.strip() for part in raw.split(",") if part.strip()]
     for name in ("data", "uploads"):
         default = work / name
-        # 默认目录的符号链接不得隐式扩大工作目录权限。
+        # Symlinked default directories must not extend access beyond the work directory.
         if default.resolve().is_relative_to(work):
             roots.append(default)
     return AccessPolicy.from_paths(roots)
@@ -117,7 +117,7 @@ def policy_from_env(work_path: Any = None, *, strict: bool = False) -> Optional[
 
 def resolve_search_paths(paths: Any, defaults: Any = None, *, work_path: Any = None,
                          strict: bool = False) -> Any:
-    """先选有效路径，再整批授权；显式越权输入不能降级到默认路径。"""
+    """Resolve paths, then authorize the entire batch; denied inputs cannot fall back to defaults."""
     def clean(value: Any) -> list[str]:
         if value is None:
             return []
@@ -157,7 +157,7 @@ def require_source(path: Any) -> Any:
 @contextmanager
 def open_source(path: Any, mode: str = "r", *, encoding: str = "utf-8",
                 errors: str = "replace") -> Iterator[Any]:
-    """受限文本读取通过目录描述符逐级打开，拒绝检查后的符号链接替换。"""
+    """Open restricted sources through directory descriptors to block post-check symlink swaps."""
     if mode not in ("r", "rb"):
         raise ValueError("Source access is read-only")
     target = require_source(path)
@@ -177,7 +177,7 @@ def open_source(path: Any, mode: str = "r", *, encoding: str = "utf-8",
             directory_fd = next_fd
         file_fd = os.open(canonical.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
         stream = os.fdopen(file_fd, mode, **options)
-        file_fd = None  # 描述符所有权交给 stream。
+        file_fd = None  # Transfer descriptor ownership to the stream.
         with stream:
             yield stream
     except OSError as exc:
@@ -194,7 +194,7 @@ def read_source_text(path: Any, *, encoding: str = "utf-8", errors: str = "repla
 
 
 def cache_partition(key: str) -> str:
-    """受限缓存分区；本地旧键保持原样。"""
+    """Partition restricted caches while preserving existing local keys."""
     policy = current_policy()
     return f"{key}:{policy.fingerprint}" if policy else key
 
@@ -204,7 +204,7 @@ def _field(obj: Any, name: str, default: Any = None) -> Any:
 
 
 def cached_sources_allowed(obj: Any) -> bool:
-    """整对象检查来源；不删片段后继续复用已混合的摘要或答案。"""
+    """Authorize all sources; never reuse mixed-source summaries by merely removing snippets."""
     if current_policy() is None:
         return True
     sources: list[Any] = []
@@ -236,7 +236,7 @@ def cached_sources_allowed(obj: Any) -> bool:
 
 
 def filter_retrieval_results(results: list[dict]) -> list[dict]:
-    """检索返回的真实来源在进入证据、日志和模型之前再次授权。"""
+    """Reauthorize result sources before they enter evidence, logs, or model prompts."""
     if current_policy() is None:
         return results
     allowed = []
@@ -248,7 +248,7 @@ def filter_retrieval_results(results: list[dict]) -> list[dict]:
 
 
 def guard_source(parameter: str) -> Callable:
-    """在函数异常捕获之前授权并规范化源路径，保留原函数签名。"""
+    """Authorize and normalize sources before exception handling, preserving the signature."""
     def decorate(function: Callable) -> Callable:
         signature = inspect.signature(function)
 
@@ -286,7 +286,7 @@ def guard_source(parameter: str) -> Callable:
 
 
 def scoped_search(function: Callable) -> Callable:
-    """核心检索只继承显式绑定的权限，不改变本地 SDK 的默认行为。"""
+    """Inherit explicitly bound permissions without changing default local SDK behavior."""
     signature = inspect.signature(function)
 
     @functools.wraps(function)

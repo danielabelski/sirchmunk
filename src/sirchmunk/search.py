@@ -3323,7 +3323,7 @@ class AgenticSearch(BaseSearch):
         query: str,
         paths: List[str],
     ) -> Optional[str]:
-        """Short-circuit for document-level queries (e.g. "请总结这篇文档").
+        """Short-circuit for document-level queries (e.g. "summarize this document").
 
         Uses the LLM to classify query intent (language-agnostic).  When
         a whole-document operation is detected **and** suitable files exist
@@ -3834,7 +3834,7 @@ class AgenticSearch(BaseSearch):
             prompt = prompt + tree_hints
 
         # Step 1 LLM call + compile hints + tree probe run in parallel
-        # (GAP 3: hints前置化, GAP 1: 树导航主动化)
+        # (GAP 3: early hints, GAP 1: proactive tree navigation)
         _step1_llm_task = self.llm.achat(
             messages=[{"role": "user", "content": prompt}],
             stream=False,
@@ -5263,7 +5263,7 @@ class AgenticSearch(BaseSearch):
         )
 
         # For CJK text, also extract consecutive CJK character runs (2-6 chars)
-        # so that e.g. "停车位申请条件" yields ["停车位申请条件", "停车位", "申请条件", ...]
+        # Preserve full phrases and shorter n-grams from unsegmented text.
         cjk_runs = _re.findall(r'[\u4e00-\u9fff\u3400-\u4dbf]{2,}', summary_text)
         # Generate sub-phrases from long CJK runs (bigrams/trigrams/4-grams)
         cjk_ngrams: List[str] = []
@@ -5495,7 +5495,7 @@ class AgenticSearch(BaseSearch):
                     elif getattr(leaf, 'summary', None):
                         page_segment_map[id(leaf)] = leaf.summary
             except (FileNotFoundError, PermissionError):
-                raise  # 文件系统错误应传播
+                raise  # Propagate filesystem errors.
             except Exception as e:
                 _loguru_logger.warning(
                     f"[TreeSample] Page extraction failed for {fname}: {e}, "
@@ -6321,7 +6321,7 @@ class AgenticSearch(BaseSearch):
                             parts, fname, leaf, leaf.summary,
                         )
             except (FileNotFoundError, PermissionError):
-                raise  # 文件系统错误应传播
+                raise  # Propagate filesystem errors.
             except Exception as e:
                 _loguru_logger.warning(
                     f"[TreeNav] Page extraction failed for {fname}: {e}, "
@@ -8001,7 +8001,7 @@ class AgenticSearch(BaseSearch):
         """Resolve file_hints (filenames) to absolute paths under *paths*.
 
         Lightweight name-only search: no metadata extraction. Used when the
-        user clearly asks for a specific document (e.g. "总结《foo.pdf》")
+        user clearly asks for a specific document (e.g. "summarize foo.pdf")
         so we can skip full dir scan + LLM rank.
 
         Returns:

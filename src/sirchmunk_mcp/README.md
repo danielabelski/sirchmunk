@@ -383,25 +383,17 @@ Options:
   --log-level {DEBUG,INFO,WARNING,ERROR}  Logging level
 ```
 
-### HTTP 安全与迁移
+### HTTP Security
 
-`--transport http` 使用 legacy SSE（`GET /sse`、`POST /messages/`），不是 Streamable HTTP。
-必须通过环境或工作目录 `.env` 设置 `SIRCHMUNK_API_TOKEN`；未配置时拒绝启动，包括本机绑定。
-客户端必须在两类请求上分别发送 `Authorization: Bearer <token>`，不能依赖会话 ID。
+HTTP mode uses legacy SSE (`/sse` and `/messages/`). Set `SIRCHMUNK_API_TOKEN`
+and send `Authorization: Bearer <token>` on every request, including localhost access.
 
-- `SIRCHMUNK_ALLOWED_PATHS`：文件或目录授权根，另默认允许工作目录的 `data/uploads`。
-- `SIRCHMUNK_SEARCH_PATHS`：默认检索位置，必须位于授权范围内，不能扩大权限。
-- `MCP_ALLOWED_HOSTS`：空值仅允许本机域名；外部部署显式配置域名及端口（可使用 `:*`）。
-- `SIRCHMUNK_ALLOWED_ORIGINS`：有 Origin 请求必须匹配；禁止使用全局 `*` 放开 MCP 防护。
+- Restrict documents with `SIRCHMUNK_ALLOWED_PATHS`; `SIRCHMUNK_SEARCH_PATHS` only sets defaults.
+- HTTP also allows the work directory's `data/uploads` and never falls back to cwd.
+- Configure external hosts and origins with `MCP_ALLOWED_HOSTS` and `SIRCHMUNK_ALLOWED_ORIGINS`.
+- stdio needs no HTTP token but respects an explicitly configured path allowlist.
 
-未提供 HTTP 搜索路径且未配置默认路径时，仅搜索 `data/uploads`，不回退 cwd。
-显式越界路径整批拒绝；模型工具读取、目录预览与派生缓存也受请求作用域约束。
-混合来源或无法验证完整来源的历史知识缓存整体跳过，可能增加重新检索耗时和 Token。
-stdio 不要求 HTTP Token；配置了白名单时执行授权，未配置时保留本地受信任工作流。
-
-不要授权整个工作目录或密钥目录。使用 TLS、最小权限账户、只读文档挂载并隔离可写目录。
-路径门控不是完整文件系统沙箱：外部提取库及搜索进程的动态文件替换风险仍需部署隔离。
-如凭据可能已泄漏，应在封堵入口后轮换，不能仅设置环境变量后继续运行旧 MCP 服务。
+Use TLS and least-privilege, read-only document mounts. Keep secrets outside authorized paths.
 
 ### `sirchmunk mcp version`
 

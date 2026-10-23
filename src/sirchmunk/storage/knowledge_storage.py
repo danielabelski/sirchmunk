@@ -1346,7 +1346,7 @@ class KnowledgeStorage:
             for row in results:
                 similarity = row[6]  # shifted by search_results at index 5
                 if similarity is not None and similarity >= similarity_threshold:
-                    # 相关性覆盖率不能代替完整证据的授权；先于描述/名称的消费。
+                    # Authorize all evidence before consuming names or descriptions; relevance is not permission.
                     if current_policy() is not None and await self.get(row[0]) is None:
                         continue
                     filtered_results.append({

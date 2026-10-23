@@ -1,4 +1,4 @@
-"""使用虚构敏感文件和确定性依赖，验证授权闭环而非真实密钥读取。"""
+"""Verify authorization with synthetic sensitive files and deterministic dependencies."""
 from __future__ import annotations
 
 import asyncio
@@ -537,14 +537,14 @@ async def test_compile_catalog_and_spec_provenance(corpus):
         spec.write_text(json.dumps({"files_read": [str(corpus.document)], "summary": "公开资料",
                                   "cached_at": "2099-01-01T00:00:00+00:00"}), encoding="utf-8")
         assert "公开资料" in await core._load_spec_context([str(corpus.docs)])
-        # resources 也是已知来源，不能仅授权 evidences。
+        # Resources are also sources; authorizing evidence alone is insufficient.
         assert not cached_sources_allowed({"search_results": [str(corpus.document)],
                    "resources": [{"type": "file", "value": str(corpus.secret)}]})
 
 
 @pytest.mark.asyncio
 async def test_web_search_rejects_paths_and_auth_returns_401(corpus, monkeypatch):
-    # 初始化副作用仅发生在测试专用工作目录，不读取用户运行环境。
+    # Keep initialization side effects inside the fixture work directory.
     api = importlib.import_module("sirchmunk.api.search")
     chat = importlib.import_module("sirchmunk.api.chat")
     with pytest.raises(Exception) as exc:
@@ -570,7 +570,7 @@ async def test_web_search_rejects_paths_and_auth_returns_401(corpus, monkeypatch
         response = await client.get("/api/v1/file-browser")
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
-    # 在 pytest 捕获流关闭前结束测试用数据库的后台同步。
+    # Stop fixture database syncing before pytest closes its captured output streams.
     knowledge = importlib.import_module("sirchmunk.api.knowledge")
     storage = getattr(knowledge, "km", None)
     if storage is not None:
@@ -607,7 +607,7 @@ async def test_pdf_docx_extensionless_and_safe_symlink(corpus, monkeypatch):
         monkeypatch.setattr("sirchmunk.utils.document_extractor._EXTRACT_TIMEOUT_S", 20)
         isolated = await DocumentExtractor.extract_isolated(office)
         assert "Office evidence" in isolated.content
-        parent_extract.assert_not_awaited()  # 确认真正经过子进程，不是回退掩盖失败。
+        parent_extract.assert_not_awaited()  # Verify subprocess extraction without a fallback masking failure.
         assert len(DocumentExtractor.extract_pages(pdf, [1])) == 1
     assert linked.is_symlink()
 
@@ -622,7 +622,7 @@ def test_posix_reader_blocks_symlink_swap_after_check(corpus, monkeypatch):
     def raced_open(path, flags, *args, **kwargs):
         nonlocal switched
         if path == corpus.document.name and not switched:
-            # 只替换测试专用文件；保留原文档供 fixture 自身清理。
+            # Swap only the fixture file; retain the original for fixture cleanup.
             corpus.document.rename(corpus.docs / "original.txt")
             corpus.document.symlink_to(corpus.secret)
             switched = True
@@ -726,7 +726,7 @@ async def test_legacy_sse_rpc_replays_attack_chain_in_process(corpus, monkeypatc
             assert (await client.post(endpoint, headers=headers, json=initialize)).status_code == 202
             await asyncio.wait_for(wait_for(lambda: reply(1) is not None), 5)
             await client.post(endpoint, headers=headers, json={"jsonrpc": "2.0", "method": "notifications/initialized"})
-            # 重放白名单外目录枚举、源码/配置原文读取的同类攻击；目标全部为虚构文件。
+            # Replay unauthorized enumeration and content reads using only synthetic files.
             for identifier, mode in enumerate(("FILENAME_ONLY", "FAST", "DEEP"), 2):
                 call = {"jsonrpc": "2.0", "id": identifier, "method": "tools/call", "params": {
                     "name": "sirchmunk_search", "arguments": {"query": "sentinel", "mode": mode,

@@ -378,7 +378,7 @@ async def execute_search_stream(request: SearchRequest, http_request: Request):
                 if line.startswith("data: "):
                     print(json.loads(line[6:]))
     """
-    # 在创建后台任务/发送 SSE 响应之前拒绝非法路径。
+    # Reject invalid paths before starting background tasks or sending SSE responses.
     authorized_kwargs = _build_search_kwargs(request)
     request_id = uuid.uuid4().hex[:12]
     log_queue: asyncio.Queue = asyncio.Queue()

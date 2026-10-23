@@ -80,7 +80,7 @@ def _classify_error(exc: Exception) -> str:
 def _resolve_rag_paths(kb_name: str) -> Tuple[List[str], str]:
     """Resolve RAG search paths from frontend kb_name or SIRCHMUNK_SEARCH_PATHS.
 
-    显式路径整批授权；非法输入不会被丢弃后回退至环境默认路径。
+    Authorize explicit paths as a batch; denied inputs never fall back to environment defaults.
     """
     raw_paths = [p.strip() for p in (kb_name or "").split(",") if p.strip()]
     paths = resolve_search_paths(raw_paths) or []
@@ -1133,7 +1133,7 @@ async def chat_websocket(websocket: WebSocket):
             enable_web_search = request_data.get("enable_web_search", False)
             search_mode = str(request_data.get("search_mode", "DEEP") or "DEEP").upper()
             if enable_rag:
-                # 在会话历史筛选等 LLM 调用之前校验输入。
+                # Validate paths before history filtering or other LLM calls.
                 _resolve_rag_paths(kb_name)
 
             logger.debug("Chat request: rag=%s, mode=%s", enable_rag, search_mode)

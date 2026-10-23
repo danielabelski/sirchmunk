@@ -29,7 +29,7 @@ _service: Optional[SirchmunkService] = None
 
 
 class MCPHttpSecurity:
-    """对握手和消息分别认证；会话 ID 不承担身份验证职责。"""
+    """Authenticate handshakes and messages separately; session IDs are not credentials."""
 
     def __init__(self, app: ASGIApp, config: Config) -> None:
         self.app = app
@@ -38,7 +38,7 @@ class MCPHttpSecurity:
 
     @staticmethod
     def validate_config(config: Config) -> str:
-        """启动前检查认证配置，不初始化搜索资源或创建监听端口。"""
+        """Validate authentication before initializing search resources or listening."""
         settings = config.mcp
         secret = settings.api_token
         token = secret.get_secret_value().strip() if secret else ""
@@ -210,7 +210,7 @@ def create_server(config: Config) -> FastMCP:
             return str(result)
 
         except AccessDenied:
-            # 由 FastMCP 编码为 isError 工具响应，不能伪装成正常检索结果。
+            # Let FastMCP encode an isError tool response, not a normal search result.
             raise
         except Exception:
             logger.exception("Search failed")
@@ -502,7 +502,7 @@ async def run_http_server(config: Config) -> None:
         f"Starting MCP server with HTTP transport on {config.mcp.host}:{config.mcp.port}"
     )
     
-    # 在初始化搜索资源或监听端口之前拒绝缺少认证配置的 HTTP 启动。
+    # Reject unauthenticated HTTP startup before initializing resources or listening.
     MCPHttpSecurity.validate_config(config)
     mcp = create_server(config)
 
