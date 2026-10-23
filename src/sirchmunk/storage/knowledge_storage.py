@@ -30,6 +30,7 @@ from sirchmunk.schema.knowledge import (
     AbstractionLevel
 )
 from ..utils.constants import DEFAULT_SIRCHMUNK_WORK_PATH
+from ..utils.access_policy import cached_sources_allowed, current_policy
 
 
 class KnowledgeStorage:
@@ -602,7 +603,8 @@ class KnowledgeStorage:
             )
 
             if row:
-                return self._row_to_cluster(row)
+                cluster = self._row_to_cluster(row)
+                return cluster if cached_sources_allowed(cluster) else None
             return None
 
         except Exception as e:
@@ -628,6 +630,8 @@ class KnowledgeStorage:
 
             if row:
                 cluster = self._row_to_cluster(row[:-1])  # Exclude embedding_vector from cluster
+                if not cached_sources_allowed(cluster):
+                    return None
                 embedding_vector = row[-1]  # Last column is embedding_vector
                 return cluster, embedding_vector
             return None
@@ -839,6 +843,7 @@ class KnowledgeStorage:
             rows = self.db.fetch_all(sql, params)
 
             clusters = [self._row_to_cluster(row) for row in rows]
+            clusters = [cluster for cluster in clusters if cached_sources_allowed(cluster)]
 
             logger.debug(f"Found {len(clusters)} clusters matching '{query}'")
             return clusters
@@ -1341,6 +1346,9 @@ class KnowledgeStorage:
             for row in results:
                 similarity = row[6]  # shifted by search_results at index 5
                 if similarity is not None and similarity >= similarity_threshold:
+                    # 相关性覆盖率不能代替完整证据的授权；先于描述/名称的消费。
+                    if current_policy() is not None and await self.get(row[0]) is None:
+                        continue
                     filtered_results.append({
                         "id": row[0],
                         "name": row[1],

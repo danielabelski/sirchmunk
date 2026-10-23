@@ -474,11 +474,23 @@ After running `sirchmunk init`, a `~/.sirchmunk/mcp_config.json` file is generat
 > In MCP Inspector: **Connect** → **Tools** → **List Tools** → `sirchmunk_search` → Input parameters (`query` and `paths`, e.g. `["/path/to/your_docs"]`) → **Run Tool**.
 > You can override the working directory temporarily with `sirchmunk mcp serve --work-path /path/to/your_work_path`.
 
+### HTTP 安全配置
+
+`--transport http` 当前使用 legacy SSE（`/sse` + `/messages/`）。HTTP 必须配置
+`SIRCHMUNK_API_TOKEN`，包括 loopback 部署；客户端每次握手和消息 POST 均须携带
+`Authorization: Bearer <token>`，会话 ID 不能代替 Token。stdio 不要求 HTTP Token。
+
+HTTP 只开放 `SIRCHMUNK_ALLOWED_PATHS` 及工作目录的 `data/uploads`。默认搜索路径
+`SIRCHMUNK_SEARCH_PATHS` 不扩大权限，未提供路径时不会搜索 cwd。外部域名还须通过
+`MCP_ALLOWED_HOSTS` 配置 Host，Origin 由 `SIRCHMUNK_ALLOWED_ORIGINS` 限制。
+显式白名单也约束 stdio 和 Web 搜索。越界路径整批拒绝，无法验证完整来源的历史缓存不复用。
+密钥与文档应分离；网络部署使用 TLS、最小权限进程和只读文档挂载。
+
 ### Features
 
 - **Multi-Mode Search**: DEEP mode (default, comprehensive 10-30s), FAST mode (greedy 2-5s), FILENAME_ONLY for fast file discovery
 - **Knowledge Cluster Management**: Automatic extraction, storage, and reuse of knowledge
-- **Standard MCP Protocol**: Works with stdio and Streamable HTTP transports
+- **Standard MCP Protocol**: Works with stdio and authenticated legacy SSE over HTTP
 
 📖 **For detailed documentation, see [Sirchmunk MCP README](src/sirchmunk_mcp/README.md)**.
 

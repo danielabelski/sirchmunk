@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 
 class LLMConfig(BaseModel):
@@ -148,6 +148,14 @@ class MCPServerConfig(BaseModel):
     )
     
     # HTTP-specific settings
+    api_token: Optional[SecretStr] = Field(default=None, repr=False, exclude=True)
+    allowed_hosts: list[str] = Field(
+        default_factory=lambda: ["127.0.0.1", "localhost", "[::1]", "127.0.0.1:*", "localhost:*", "[::1]:*"],
+    )
+    allowed_origins: list[str] = Field(
+        default_factory=lambda: ["http://127.0.0.1", "http://localhost", "http://[::1]",
+                                         "http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
+    )
     host: str = Field(
         default="localhost",
         description="Host for HTTP transport"
@@ -284,7 +292,16 @@ class Config(BaseModel):
             transport=os.getenv("MCP_TRANSPORT", "stdio"),
             host=os.getenv("MCP_HOST", "localhost"),
             port=int(os.getenv("MCP_PORT", "8080")),
+            api_token=os.getenv("SIRCHMUNK_API_TOKEN", "").strip() or None,
         )
+        hosts = os.getenv("MCP_ALLOWED_HOSTS", "").strip()
+        origins = os.getenv("SIRCHMUNK_ALLOWED_ORIGINS", "").strip()
+        if hosts:
+            mcp_config.allowed_hosts = [p.strip() for p in hosts.split(",") if p.strip()]
+        if origins:
+            mcp_config.allowed_origins = [p.strip() for p in origins.split(",") if p.strip()]
+        if mcp_config.transport == "http" and not mcp_config.api_token:
+            raise ValueError("MCP HTTP requires SIRCHMUNK_API_TOKEN; use stdio for trusted local access")
         
         return cls(
             llm=llm_config,

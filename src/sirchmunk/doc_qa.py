@@ -23,6 +23,7 @@ from loguru import logger
 
 from sirchmunk.llm.openai_chat import OpenAIChat
 from sirchmunk.llm.prompts import DETECT_DOC_INTENT, DIRECT_DOC_ANALYSIS
+from sirchmunk.utils.access_policy import guard_source, read_source_text, require_source, source_allowed
 
 # ------------------------------------------------------------------
 # Constants
@@ -91,6 +92,7 @@ async def detect_doc_intent(
     return None
 
 
+@guard_source("paths")
 def collect_doc_files(
     paths: List[str],
     max_file_size: int = DIRECT_LOAD_MAX_FILE_SIZE,
@@ -122,6 +124,8 @@ def collect_doc_files(
         entries = [p] if p.is_file() else _list_dir_files(p)
 
         for fp in entries:
+            if not source_allowed(fp):
+                continue
             ext = fp.suffix.lower()
             if ext not in _DOC_EXTENSIONS:
                 continue
@@ -259,7 +263,7 @@ def _list_dir_files(directory: Path) -> List[Path]:
     """List immediate child files of *directory* (non-recursive)."""
     try:
         return sorted(
-            (e for e in directory.iterdir() if e.is_file()),
+            (e for e in directory.iterdir() if source_allowed(e) and e.is_file()),
             key=lambda f: f.name,
         )
     except PermissionError:
@@ -272,12 +276,13 @@ async def _extract_text(df: DocFile) -> Optional[str]:
     Uses direct file read for text formats; falls back to kreuzberg
     ``fast_extract`` for binary formats (PDF, DOCX, PPTX, …).
     """
+    path = require_source(df.path)
     try:
         if df.is_text:
-            return Path(df.path).read_text(encoding="utf-8", errors="replace")
+            return read_source_text(path, encoding="utf-8", errors="replace")
 
         from sirchmunk.utils.file_utils import fast_extract
-        result = await fast_extract(df.path)
+        result = await fast_extract(path)
         return result.content if result and result.content else None
     except Exception as exc:
         logger.debug(f"[DocQA] Text extraction failed for {df.path}: {exc}")

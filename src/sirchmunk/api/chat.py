@@ -21,6 +21,7 @@ import threading
 
 import openai
 
+from sirchmunk.utils.access_policy import bind_access, policy_from_env, resolve_search_paths
 from sirchmunk.search import AgenticSearch
 from sirchmunk.llm.openai_chat import OpenAIChat
 from sirchmunk.api.components.history_storage import HistoryStorage
@@ -29,7 +30,6 @@ from sirchmunk.api.security import (
     is_path_allowed,
     is_path_allowed_strict,
     verify_ws_token,
-    validate_user_path,
     file_browser_limiter,
     audit_logger,
 )
@@ -80,29 +80,11 @@ def _classify_error(exc: Exception) -> str:
 def _resolve_rag_paths(kb_name: str) -> Tuple[List[str], str]:
     """Resolve RAG search paths from frontend kb_name or SIRCHMUNK_SEARCH_PATHS.
 
-    User-provided paths are validated against the whitelist and filesystem
-    constraints.  Invalid entries are silently dropped.
+    显式路径整批授权；非法输入不会被丢弃后回退至环境默认路径。
     """
-    def _parse(s: str) -> List[str]:
-        return [p.strip() for p in (s or "").split(",") if p.strip()]
-
-    if kb_name and _parse(kb_name):
-        raw_paths = _parse(kb_name)
-        validated: List[str] = []
-        for rp in raw_paths:
-            ok, result = validate_user_path(rp)
-            if ok:
-                validated.append(result)
-            else:
-                logger.debug("Rejected user path %r: %s", rp, result)
-        if validated:
-            return validated, ", ".join(os.path.basename(p) for p in validated)
-
-    # Fallback to environment variable
-    env_paths = os.getenv("SIRCHMUNK_SEARCH_PATHS", "")
-    paths = _parse(env_paths)
-    display = ", ".join(paths) if paths else ""
-    return paths, display
+    raw_paths = [p.strip() for p in (kb_name or "").split(",") if p.strip()]
+    paths = resolve_search_paths(raw_paths) or []
+    return paths, ", ".join(os.path.basename(p) for p in paths)
 
 
 # ---------------------------------------------------------------------------
@@ -807,13 +789,14 @@ async def _run_rag_search(
     search_engine = get_search_instance(log_callback=search_log_callback)
     search_mode = (search_mode or "DEEP").upper()
 
-    result = await search_engine.search(
-        query=message,
-        paths=paths,
-        mode=search_mode,
-        top_k_files=3,
-        response_format="context",
-    )
+    with bind_access(policy_from_env()):
+        result = await search_engine.search(
+            query=message,
+            paths=paths,
+            mode=search_mode,
+            top_k_files=3,
+            response_format="context",
+        )
 
     references: List[Dict[str, Any]] = []
     if hasattr(result, "answer"):
@@ -1149,6 +1132,9 @@ async def chat_websocket(websocket: WebSocket):
             enable_rag = request_data.get("enable_rag", False)
             enable_web_search = request_data.get("enable_web_search", False)
             search_mode = str(request_data.get("search_mode", "DEEP") or "DEEP").upper()
+            if enable_rag:
+                # 在会话历史筛选等 LLM 调用之前校验输入。
+                _resolve_rag_paths(kb_name)
 
             logger.debug("Chat request: rag=%s, mode=%s", enable_rag, search_mode)
             

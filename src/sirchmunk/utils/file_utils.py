@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Union
 
 from loguru import logger
+from sirchmunk.utils.access_policy import guard_source, open_source
 
 from sirchmunk.utils.document_extractor import (
     DocumentExtractor,
@@ -29,6 +30,7 @@ async def fast_extract(file_path: Union[str, Path]) -> ExtractionOutput:
     return await DocumentExtractor.extract(file_path)
 
 
+@guard_source("file_path")
 def get_fast_hash(file_path: Union[str, Path], sample_size: int = 8192):
     """
     Computes a partial hash (fingerprint) by combining:
@@ -42,12 +44,12 @@ def get_fast_hash(file_path: Union[str, Path], sample_size: int = 8192):
 
         # If the file is smaller than the combined sample size, read it entirely
         if file_size <= sample_size * 2:
-            with open(file_path, "rb") as f:
+            with open_source(file_path, "rb") as f:
                 return f"{hashlib.md5(f.read()).hexdigest()}_{file_size}"
 
         # Large file sampling: Read head and tail to avoid full disk I/O
         hash_content = hashlib.md5()
-        with open(file_path, "rb") as f:
+        with open_source(file_path, "rb") as f:
             hash_content.update(f.read(sample_size))
             f.seek(-sample_size, os.SEEK_END)
             hash_content.update(f.read(sample_size))

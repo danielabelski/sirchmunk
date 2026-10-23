@@ -10,6 +10,7 @@ This is a *zero-index* approach — no pre-built vector indices required.
 """
 import asyncio
 import copy
+import contextvars
 import hashlib
 import random
 import json
@@ -32,6 +33,9 @@ except ImportError:
     _pypdf = None  # type: ignore[assignment]
 
 from sirchmunk.llm.openai_chat import OpenAIChat
+from sirchmunk.utils.access_policy import (
+    cache_partition, guard_source, open_source, read_source_text, require_source, source_allowed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -584,7 +588,7 @@ class DirectoryScanner:
         """
         if isinstance(paths, (str, Path)):
             paths = [paths]
-        paths = [Path(p).resolve() for p in paths]
+        paths = [Path(require_source(p)).resolve() for p in paths]
 
         t_start = datetime.now()
         validation_started = time.perf_counter()
@@ -592,7 +596,7 @@ class DirectoryScanner:
         validation_ms = (time.perf_counter() - validation_started) * 1000
         cache_key = self._cache_key(paths)
         cached = self._scan_cache.get(cache_key, fingerprint)
-        if cached is not None:
+        if cached is not None and all(source_allowed(c.path) for c in cached.candidates):
             cached.cache_validation_ms = validation_ms
             cached.scan_duration_ms = validation_ms
             cached.cache_mode = self._scan_cache.mode
@@ -624,7 +628,8 @@ class DirectoryScanner:
         with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
             candidates = await loop.run_in_executor(
                 pool,
-                lambda: self._extract_metadata_batch(all_files),
+                contextvars.copy_context().run,
+                self._extract_metadata_batch, all_files,
             )
 
         result.candidates = candidates
@@ -656,6 +661,7 @@ class DirectoryScanner:
         Returns:
             Updated ScanResult with ``ranked_candidates`` populated.
         """
+        scan_result.candidates = [c for c in scan_result.candidates if source_allowed(c.path)]
         if not self.llm:
             logger.warning("[DirScanner] No LLM provided — skipping rank phase")
             scan_result.ranked_candidates = scan_result.candidates
@@ -726,7 +732,7 @@ class DirectoryScanner:
             "max_file_size_bytes": self.max_file_size_bytes,
         }
         return hashlib.sha256(
-            json.dumps(payload, sort_keys=True).encode("utf-8")
+            cache_partition(json.dumps(payload, sort_keys=True)).encode("utf-8")
         ).hexdigest()
 
     def _collect_files_with_fingerprint(
@@ -739,6 +745,8 @@ class DirectoryScanner:
 
         def _visit(path: Path, depth: int) -> None:
             nonlocal total_dirs
+            if not source_allowed(path):
+                return
             if path.is_file():
                 if path.suffix.lower() in _SCANNABLE_EXTENSIONS:
                     files.append(path)
@@ -752,6 +760,8 @@ class DirectoryScanner:
                 return
             for entry in entries:
                 name = entry.name
+                if not source_allowed(entry):
+                    continue
                 if name.startswith(".") or name in self.exclude_patterns:
                     continue
                 if any(
@@ -777,6 +787,7 @@ class DirectoryScanner:
                 digest.update(f"missing:{file_path}".encode("utf-8"))
         return files, total_dirs, digest.hexdigest()
 
+    @guard_source("root")
     def _walk(
         self,
         root: Path,
@@ -803,6 +814,8 @@ class DirectoryScanner:
                 return
 
             name = entry.name
+            if not source_allowed(entry):
+                continue
 
             # Skip excluded patterns
             if name in self.exclude_patterns:
@@ -862,6 +875,7 @@ class DirectoryScanner:
                 logger.debug(f"[DirScanner] Metadata error for {f}: {exc}")
         return candidates
 
+    @guard_source("file_path")
     def _extract_single(self, file_path: Path) -> Optional[FileCandidate]:
         """Extract comprehensive metadata from a single file.
 
@@ -980,7 +994,7 @@ class DirectoryScanner:
             try:
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore")
-                    with open(path, "rb") as f:
+                    with open_source(path, "rb") as f:
                         reader = _pypdf.PdfReader(f, strict=False)
                         page_count = len(reader.pages)
                         text = reader.pages[0].extract_text() if page_count > 0 else ""
@@ -988,7 +1002,7 @@ class DirectoryScanner:
             except Exception as exc:
                 result_box.append(exc)
 
-        t = threading.Thread(target=_read, daemon=True)
+        t = threading.Thread(target=contextvars.copy_context().run, args=(_read,), daemon=True)
         try:
             t.start()
             t.join(timeout=timeout_s)
@@ -1010,7 +1024,8 @@ class DirectoryScanner:
     def _extract_text_head(self, path: Path, candidate: FileCandidate) -> None:
         """Read the first ``max_preview_chars`` bytes of a text file."""
         try:
-            raw = path.read_bytes()[: self.max_preview_chars * 4]
+            with open_source(path, "rb") as stream:
+                raw = stream.read(self.max_preview_chars * 4)
             enc = self._detect_encoding(raw[:4096]) or "utf-8"
             text = raw.decode(enc, errors="replace")
             lines = text.split("\n")
@@ -1030,13 +1045,14 @@ class DirectoryScanner:
         """Extract preview, title, encoding, and line count from plain-text files."""
         # Detect encoding
         try:
-            raw_head = path.read_bytes()[:4096]
+            with open_source(path, "rb") as stream:
+                raw_head = stream.read(4096)
             candidate.encoding = self._detect_encoding(raw_head)
         except Exception:
             candidate.encoding = "utf-8"
 
         try:
-            with open(path, "r", encoding=candidate.encoding or "utf-8", errors="replace") as f:
+            with open_source(path, "r", encoding=candidate.encoding or "utf-8", errors="replace") as f:
                 head = f.read(self.max_preview_chars + 500)
         except Exception:
             return
@@ -1096,7 +1112,7 @@ class DirectoryScanner:
                 warnings.filterwarnings("ignore", message=".*wrong pointing object.*")
                 warnings.filterwarnings("ignore", message=".*Ignoring wrong.*")
 
-                with open(path, "rb") as f:
+                with open_source(path, "rb") as f:
                     reader = pypdf.PdfReader(f)
                     meta = reader.metadata or {}
 
@@ -1251,7 +1267,7 @@ class DirectoryScanner:
 
         try:
             enc = candidate.encoding or "utf-8"
-            content = path.read_text(encoding=enc, errors="replace")
+            content = read_source_text(path, encoding=enc, errors="replace")
             candidate.full_content = content
             candidate.content_loaded = True
         except Exception as exc:

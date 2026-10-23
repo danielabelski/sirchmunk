@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from sirchmunk.llm.openai_chat import OpenAIChat
 from sirchmunk.search import AgenticSearch
 from sirchmunk.utils.constants import DEFAULT_SIRCHMUNK_WORK_PATH
+from sirchmunk.utils.access_policy import AccessDenied, bind_access, policy_from_env, resolve_search_paths
 
 logger = logging.getLogger(__name__)
 
@@ -267,9 +268,13 @@ def _resolve_response_format(request: SearchRequest) -> str:
 
 def _build_search_kwargs(request: SearchRequest) -> dict:
     response_format = _resolve_response_format(request)
+    try:
+        paths = resolve_search_paths(_normalize_api_paths(request.paths), work_path=_resolve_work_path())
+    except AccessDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from None
     kwargs = {
         "query": request.query,
-        "paths": _normalize_api_paths(request.paths),
+        "paths": paths,
         "mode": request.mode,
         "enable_dir_scan": request.enable_dir_scan,
         "response_format": response_format,
@@ -313,9 +318,9 @@ def _format_result(result, request: SearchRequest) -> dict:
 async def execute_search(request: SearchRequest) -> SearchResponse:
     """Execute an AgenticSearch query and return a JSON response."""
     try:
+        kwargs = _build_search_kwargs(request)
         async with _search_semaphore:
             searcher = _get_search_instance()
-            kwargs = _build_search_kwargs(request)
             logger.debug(
                 "Executing search: query='%s', mode=%s, paths(raw)=%s paths(resolved)=%s",
                 request.query,
@@ -323,7 +328,8 @@ async def execute_search(request: SearchRequest) -> SearchResponse:
                 request.paths,
                 kwargs.get("paths"),
             )
-            result = await searcher.search(**kwargs)
+            with bind_access(policy_from_env(_resolve_work_path())):
+                result = await searcher.search(**kwargs)
 
         return SearchResponse(success=True, data=_format_result(result, request))
 
@@ -372,6 +378,8 @@ async def execute_search_stream(request: SearchRequest, http_request: Request):
                 if line.startswith("data: "):
                     print(json.loads(line[6:]))
     """
+    # 在创建后台任务/发送 SSE 响应之前拒绝非法路径。
+    authorized_kwargs = _build_search_kwargs(request)
     request_id = uuid.uuid4().hex[:12]
     log_queue: asyncio.Queue = asyncio.Queue()
 
@@ -392,7 +400,7 @@ async def execute_search_stream(request: SearchRequest, http_request: Request):
         try:
             async with _search_semaphore:
                 searcher = _create_search_instance(log_callback=_log_callback)
-                skwargs = _build_search_kwargs(request)
+                skwargs = authorized_kwargs
                 logger.debug(
                     "[stream:%s] Starting search: query='%s' mode=%s paths(resolved)=%s",
                     request_id,
@@ -400,7 +408,8 @@ async def execute_search_stream(request: SearchRequest, http_request: Request):
                     request.mode,
                     skwargs.get("paths"),
                 )
-                result = await searcher.search(**skwargs)
+                with bind_access(policy_from_env(_resolve_work_path())):
+                    result = await searcher.search(**skwargs)
 
             formatted = _format_result(result, request)
             await log_queue.put(("result", {"success": True, "data": formatted}))

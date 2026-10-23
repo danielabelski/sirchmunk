@@ -7,6 +7,7 @@ as MCP tools following the Model Context Protocol specification.
 """
 
 import asyncio
+import hmac
 import json
 import logging
 import sys
@@ -16,12 +17,66 @@ from mcp.server.fastmcp import FastMCP
 
 from .config import Config
 from .service import SirchmunkService
+from sirchmunk.utils.access_policy import AccessDenied
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 
 logger = logging.getLogger(__name__)
 
 # Global service instance (initialized when server starts)
 _service: Optional[SirchmunkService] = None
+
+
+class MCPHttpSecurity:
+    """对握手和消息分别认证；会话 ID 不承担身份验证职责。"""
+
+    def __init__(self, app: ASGIApp, config: Config) -> None:
+        self.app = app
+        self.settings = config.mcp
+        self.token = self.validate_config(config)
+
+    @staticmethod
+    def validate_config(config: Config) -> str:
+        """启动前检查认证配置，不初始化搜索资源或创建监听端口。"""
+        settings = config.mcp
+        secret = settings.api_token
+        token = secret.get_secret_value().strip() if secret else ""
+        if not token:
+            raise ValueError("MCP HTTP requires SIRCHMUNK_API_TOKEN")
+        if "*" in settings.allowed_hosts or "*" in settings.allowed_origins:
+            raise ValueError("MCP HTTP requires explicit allowed hosts and origins")
+        return token
+
+    @staticmethod
+    def _matches(value: str, allowed: List[str]) -> bool:
+        return any(value == item or (
+            item.endswith(":*") and value.startswith(item[:-1])
+            and value[len(item) - 1:].isdigit()
+        ) for item in allowed)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = scope.get("headers", [])
+        auth = [value.decode("latin-1") for name, value in headers if name.lower() == b"authorization"]
+        valid = len(auth) == 1 and auth[0].startswith("Bearer ") and hmac.compare_digest(
+            auth[0][7:].strip().encode("utf-8"), self.token.encode("utf-8"),
+        )
+        if not valid:
+            response = JSONResponse({"error": "Invalid or missing token"}, status_code=401,
+                                    headers={"WWW-Authenticate": "Bearer"})
+            await response(scope, receive, send)
+            return
+        host = [v.decode("latin-1") for k, v in headers if k.lower() == b"host"]
+        origin = [v.decode("latin-1") for k, v in headers if k.lower() == b"origin"]
+        if len(host) != 1 or not self._matches(host[0], self.settings.allowed_hosts) or (
+            origin and (len(origin) != 1 or not self._matches(origin[0], self.settings.allowed_origins))
+        ):
+            await JSONResponse({"error": "Invalid host or origin"}, status_code=403)(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
 def create_server(config: Config) -> FastMCP:
@@ -39,8 +94,14 @@ def create_server(config: Config) -> FastMCP:
     _service = SirchmunkService(config)
     
     # Create FastMCP server
+    from mcp.server.transport_security import TransportSecuritySettings
     mcp = FastMCP(
         name=config.mcp.server_name,
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=config.mcp.allowed_hosts,
+            allowed_origins=config.mcp.allowed_origins,
+        ),
     )
     
     logger.info(
@@ -148,9 +209,12 @@ def create_server(config: Config) -> FastMCP:
 
             return str(result)
 
-        except Exception as e:
-            logger.error(f"Search failed: {e}", exc_info=True)
-            return f"Search failed: {str(e)}"
+        except AccessDenied:
+            # 由 FastMCP 编码为 isError 工具响应，不能伪装成正常检索结果。
+            raise
+        except Exception:
+            logger.exception("Search failed")
+            raise RuntimeError("Search failed; consult the server log") from None
 
     # NOTE: sirchmunk_scan_dir is intentionally NOT registered as an MCP tool
     # (removed @mcp.tool() to avoid external exposure).  The implementation is
@@ -423,7 +487,7 @@ async def run_stdio_server(config: Config) -> None:
 
 
 async def run_http_server(config: Config) -> None:
-    """Run MCP server with Streamable HTTP transport.
+    """Run MCP server with authenticated legacy SSE transport.
     
     This transport mode runs an HTTP server that communicates via
     HTTP with streaming support, suitable for web-based clients.
@@ -438,13 +502,14 @@ async def run_http_server(config: Config) -> None:
         f"Starting MCP server with HTTP transport on {config.mcp.host}:{config.mcp.port}"
     )
     
-    # Create server
+    # 在初始化搜索资源或监听端口之前拒绝缺少认证配置的 HTTP 启动。
+    MCPHttpSecurity.validate_config(config)
     mcp = create_server(config)
 
     try:
         import uvicorn
         uv_config = uvicorn.Config(
-            mcp.sse_app(),
+            MCPHttpSecurity(mcp.sse_app(), config),
             host=config.mcp.host,
             port=config.mcp.port,
             log_level="info",

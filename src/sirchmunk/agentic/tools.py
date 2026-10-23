@@ -18,14 +18,19 @@ from sirchmunk.schema.search_context import SearchContext
 from sirchmunk.storage.knowledge_storage import KnowledgeStorage
 from sirchmunk.utils.constants import GREP_KEYWORD_CONCURRENT_LIMIT, GREP_TIMEOUT
 from sirchmunk.utils.file_utils import fast_extract
+from sirchmunk.utils.access_policy import (
+    AccessDenied, cached_sources_allowed, guard_source, open_source, read_source_text, require_source,
+)
 
 logger = logging.getLogger(__name__)
 
 
+@guard_source("path")
 def _looks_like_plain_text_file(path: Path, *, sample_bytes: int = 4096) -> bool:
     """Return True for extensionless/raw files that are likely UTF-8 text."""
     try:
-        raw = path.read_bytes()[:sample_bytes]
+        with open_source(path, "rb") as stream:
+            raw = stream.read(sample_bytes)
     except OSError:
         return False
     if not raw:
@@ -580,6 +585,10 @@ class FileReadTool(BaseTool):
         if not file_paths:
             return "No file paths provided.", {}
 
+        try:
+            file_paths = [require_source(fp) for fp in file_paths]
+        except AccessDenied:
+            return "File read denied: unauthorized search scope.", {"denied": True}
         outputs: List[str] = []
         files_read: List[str] = []
         total_chars = 0
@@ -610,7 +619,7 @@ class FileReadTool(BaseTool):
                     ".sh", ".bash", ".toml", ".cfg", ".ini", ".conf",
                 }
                 if path.suffix.lower() in text_extensions or _looks_like_plain_text_file(path):
-                    content = path.read_text(encoding="utf-8", errors="replace")
+                    content = read_source_text(path, encoding="utf-8", errors="replace")
                 else:
                     extraction = await fast_extract(path)
                     content = extraction.content if extraction else ""
@@ -696,6 +705,7 @@ class KnowledgeQueryTool(BaseTool):
         except Exception as exc:
             return f"Knowledge query failed: {exc}", {"error": str(exc)}
 
+        clusters = [cluster for cluster in clusters if cached_sources_allowed(cluster)]
         if not clusters:
             return "No matching knowledge clusters found.", {"query": query, "count": 0}
 
@@ -795,6 +805,10 @@ class TreeNavigationTool(BaseTool):
         query: str = kwargs.get("query", "")
         if not file_path or not query:
             return "file_path and query are required.", {}
+        try:
+            file_path = require_source(file_path)
+        except AccessDenied:
+            return "Tree navigation denied: unauthorized search scope.", {"denied": True}
 
         if (
             self._available_paths

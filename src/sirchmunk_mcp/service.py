@@ -12,10 +12,10 @@ import contextlib
 import logging
 import os
 import sys
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from sirchmunk import AgenticSearch
+from sirchmunk.utils.access_policy import bind_access, policy_from_env, resolve_search_paths
 from .config import Config
 
 if TYPE_CHECKING:
@@ -223,16 +223,13 @@ class SirchmunkService:
         if response_format not in ("rich", "minimal", "context", "json"):
             raise ValueError("response_format must be rich, minimal, context, or json")
         
-        # Normalize paths
-        if isinstance(paths, str):
-            paths = [paths]
-        
-        # Validate search paths if provided
-        if paths:
-            for p in paths:
-                path_obj = Path(p)
-                if not path_obj.exists():
-                    logger.warning(f"Search path does not exist: {p}")
+        strict = self.config.mcp.transport == "http"
+        policy = policy_from_env(self.config.sirchmunk.work_path, strict=strict)
+        with bind_access(policy):
+            paths = resolve_search_paths(
+                paths, self.config.sirchmunk.paths,
+                work_path=self.config.sirchmunk.work_path, strict=strict,
+            )
         
         # Apply defaults from configuration
         max_depth = max_depth or self.config.sirchmunk.search_defaults.max_depth
@@ -261,7 +258,8 @@ class SirchmunkService:
             if max_token_budget is not None:
                 kwargs["max_token_budget"] = max_token_budget
 
-            result = await self.searcher.search(**kwargs)
+            with bind_access(policy):
+                result = await self.searcher.search(**kwargs)
             
             logger.info(f"Search completed: mode={mode}, result_type={type(result).__name__}")
             return result
